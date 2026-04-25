@@ -147,9 +147,13 @@ export function generateSummary(
   writer: SessionWriter,
   sessionId?: string
 ): string | null {
-  const summary = buildSessionSummary(writer, sessionId);
+  const resolvedId = sessionId ?? writer.getLatestSessionId();
+  if (!resolvedId) return null;
+  const summary = buildSessionSummary(writer, resolvedId);
   if (!summary) return null;
   const markdown = renderSummaryMarkdown(summary);
+  // Ensure session is initialized so writeSummary has a target dir
+  writer.initSession(resolvedId);
   writer.writeSummary(markdown);
   return markdown;
 }
