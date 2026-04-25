@@ -20,10 +20,11 @@ _Orion orchestrates. Sub-agents execute. Kristian reviews when ready._
 - [x] Bug 1 (typo): `{"taks":[...]}` directly visible in response body
 - [x] Docs: NETWORK_RESEARCH.md + AGENT_EXPERIMENT.md updated
 
-### Workstream 3: Vite playground
-- [ ] Add `playground/vite/` — minimal Vite + React app
-- [ ] Same test scenarios as Next.js playground
-- [ ] Verify the provider works without Next.js adapter
+### Workstream 3: Vite playground ✅ DONE
+- [x] Created `playground-vite/` — Vite 6 + React 19 + TypeScript strict
+- [x] 4 test scenarios: counter, error, fetch 200, fetch 404
+- [x] Provider works without Next.js adapter — just needs sidecarUrl prop
+- [x] Runs on port 3801
 
 ### Workstream 4: Testing
 - [ ] Playwright tests: start sidecar → open playground → click buttons → assert files exist
