@@ -1,4 +1,5 @@
 import * as http from "node:http";
+import * as crypto from "node:crypto";
 import type {
   SidecarConfig,
   AgentReplayEvent,
@@ -86,7 +87,15 @@ export function createSidecar(config: SidecarConfig = {}): {
         };
 
         if (payload.events.length > 0) {
-          const sessionId = payload.events[0]!.sessionId;
+          // Validate/generate sessionId
+          let sessionId = payload.events[0]!.sessionId;
+          if (!sessionId) {
+            sessionId = crypto.randomUUID();
+            // Backfill sessionId on all events in the batch
+            for (const event of payload.events) {
+              event.sessionId = sessionId;
+            }
+          }
 
           // Initialize session dir if new
           if (!activeSessions.has(sessionId)) {

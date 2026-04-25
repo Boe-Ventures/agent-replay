@@ -1,3 +1,4 @@
+import * as crypto from "node:crypto";
 import type { AgentReplayEvent, SessionMetadata } from "../core/types.js";
 import { SessionWriter } from "../server/writer.js";
 
@@ -30,7 +31,13 @@ export async function POST(request: NextRequest): Promise<Response> {
     };
 
     if (payload.events.length > 0) {
-      const sessionId = payload.events[0]!.sessionId;
+      let sessionId = payload.events[0]!.sessionId;
+      if (!sessionId) {
+        sessionId = crypto.randomUUID();
+        for (const event of payload.events) {
+          event.sessionId = sessionId;
+        }
+      }
 
       if (!activeSessions.has(sessionId)) {
         writer.initSession(sessionId);

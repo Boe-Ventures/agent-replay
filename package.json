@@ -1,6 +1,6 @@
 {
   "name": "@boe-ventures/agent-replay",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local session recording for AI coding agents — captures DOM mutations, console logs, network requests, and errors from your dev server into structured JSONL files that agents can read directly",
   "type": "module",
   "main": "./dist/index.js",

@@ -7,7 +7,7 @@ import { PostTransport } from "../core/transport.js";
 import { getOrCreateSession } from "../core/session.js";
 
 export interface AgentReplayProviderProps {
-  children: React.ReactNode;
+  children?: React.ReactNode;
   /** Enable recording. Default: true in development */
   enabled?: boolean;
   /** Sidecar URL. Default: http://localhost:3700 */
