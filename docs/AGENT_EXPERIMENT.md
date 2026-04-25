@@ -142,8 +142,101 @@ No errors recorded.
 The experiment proves the core thesis: session recordings can serve as the "eyes" for a coding agent debugging a web app. The main gaps (response body capture, React warnings, noise filtering) are addressable improvements, not fundamental limitations.
 
 ### Next Steps
-- [ ] Add response body capture (opt-in, with size limit)
+- [x] Add response body capture (opt-in, with size limit)
 - [ ] Auto-promote console.error to errors.jsonl
 - [ ] Add default network ignore patterns for dev server internals
 - [ ] Test with an actual coding agent (Claude Code with CLAUDE.md)
 - [ ] Build themed playground variations for different bug categories
+
+---
+
+## Re-run: After Network Interception Rewrite (2026-04-25)
+
+### What Changed
+Rewrote the network interception in `src/core/recorder.ts` to production-quality, following PostHog/Sentry patterns:
+- **Response body capture** via `response.clone()` + 500ms timeout for streaming
+- **Request body capture** with serialization for all BodyInit types
+- **Request/response header capture**
+- **XHR response body** handling all `responseType` values (text, json, document, arraybuffer, blob)
+- **WebSocket interception** (constructor patching, send/receive/open/close/error)
+- **PerformanceObserver** integration for transferSize and initiatorType
+- **Configurable** via `NetworkConfig` (maxBodySize, bodyTimeout, ignoreUrls, etc.)
+
+### Results
+
+Re-ran the same 4-bug playground experiment with the enriched network capture.
+
+#### Bug 1 — API typo (`taks` → `tasks`)
+**Before:** `GET /api/tasks → 200 OK` — no body, agent had to guess from console error.
+**After:** `GET /api/tasks → 200 OK` with `responseBody: {"taks":[...],"count":3}` — **the typo is directly visible in network.jsonl!**
+
+An agent can now:
+1. See `GET /api/tasks → 200` + client error `data.tasks is not iterable`
+2. Read the response body → spot `taks` instead of `tasks`
+3. Jump to route.ts and fix the typo
+
+**Verdict:** ✅ Trivially diagnosable. The #1 requested improvement delivers.
+
+#### Bug 2 — Malformed JSON response
+**Before:** `POST /api/tasks → 201 Created` — no body, only `SyntaxError` in console.
+**After:** `POST /api/tasks → 201 Created` with `responseBody: {"success": true, "task": {"id": "...", "title": "Test task"` — **the missing closing brace is visible!**
+
+An agent can now:
+1. See the console SyntaxError
+2. Read the actual response body → see it's truncated/malformed JSON
+3. Know exactly what's wrong without reading the server code first
+
+**Verdict:** ✅ Even more diagnosable than before.
+
+#### Bug 3 — Missing DELETE handler
+**Before:** `DELETE /api/tasks → 405` — clear from status code.
+**After:** `DELETE /api/tasks → 405` with `isError: true`, empty responseBody, full headers.
+
+**Verdict:** ✅ Same clarity, now with `isError` flag for easy filtering.
+
+#### Bug 4 — Missing React `key` prop
+**Still not captured** in JSONL files. React internal warning system.
+
+### New Captured Data (sample network.jsonl entry)
+```json
+{
+  "timestamp": 1777143933915,
+  "offsetMs": 852,
+  "method": "GET",
+  "url": "/api/tasks",
+  "status": 200,
+  "statusText": "OK",
+  "durationMs": 285.2,
+  "requestHeaders": {},
+  "responseHeaders": {
+    "connection": "keep-alive",
+    "content-type": "application/json",
+    "transfer-encoding": "chunked"
+  },
+  "responseBody": "{\"taks\":[{\"id\":\"1\",...}],\"count\":3}",
+  "responseSize": 193,
+  "initiatorType": "fetch",
+  "isError": false,
+  "initiator": "fetch"
+}
+```
+
+### Also captured: request bodies
+```json
+{
+  "method": "POST",
+  "url": "/api/tasks",
+  "requestHeaders": { "Content-Type": "application/json" },
+  "requestBody": "{\"title\":\"Test task\"}",
+  "responseBody": "{\"success\": true, \"task\": {\"id\": \"...\", \"title\": \"Test task\""
+}
+```
+
+### Assessment
+
+Response body capture is the single biggest improvement to agent diagnosability. Bug 1 went from "agent needs to correlate console error with API response and guess at the data shape" to "agent can literally read the response and see `taks` vs `tasks`." That's the difference between 3 steps of reasoning and 1 step.
+
+### Remaining Gaps
+1. **Network noise** — `__nextjs_original-stack-frames` and `webpack.hot-update.json` requests still pollute. Default ignore patterns for `_next/` internals would clean this up.
+2. **React warnings** — Still not captured.
+3. **console.error → errors.jsonl** — Not yet implemented.
