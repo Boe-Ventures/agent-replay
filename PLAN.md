@@ -4,11 +4,11 @@ _Orion orchestrates. Sub-agents execute. Kristian reviews when ready._
 
 ## Current Sprint: Get to v0.1.0 publishable
 
-### Workstream 1: End-to-end validation
-- [ ] Start sidecar + playground, click all 4 buttons, verify events land in `.agent-replay/`
-- [ ] Verify summary.md output matches DESIGN.md spec
-- [ ] Verify separate JSONL files (console, network, errors) are correct
-- [ ] Fix any runtime issues
+### Workstream 1: End-to-end validation ✅ DONE
+- [x] Start sidecar + playground, click all 4 buttons, verify events land in `.agent-replay/`
+- [x] Verify separate JSONL files (console, network, errors) are correct
+- [x] Fixed: playground port, summary persistence bug
+- [x] CLI summary/errors/network all work
 
 ### Workstream 2: Network interception deep-dive
 - [ ] Research PostHog/Sentry/Amplitude source code for how they intercept fetch/XHR
@@ -27,13 +27,18 @@ _Orion orchestrates. Sub-agents execute. Kristian reviews when ready._
 - [ ] Unit tests for summarizer, writer, session management
 - [ ] Use bun for running tests
 
-### Workstream 5: npm + GitHub marketing
-- [ ] npm SEO: description, keywords, repository, homepage in package.json
-- [ ] GitHub: description, topics, about, social preview image
-- [ ] GitHub Pages site (like portal-schemas) — grid of features, code examples, architecture diagram
-- [ ] README badges (npm version, license, TypeScript)
+### Workstream 5: npm + GitHub marketing ✅ DONE
+- [x] npm SEO: description, keywords, repository, homepage in package.json
+- [x] GitHub: description, 9 topics, homepage
+- [x] GitHub Pages site live at boe-ventures.github.io/agent-replay/
+- [x] README badges (npm version, license, TypeScript, stars)
 
-### Workstream 6: Polish for publish
+### Workstream 6: Themed playgrounds
+- [ ] Next.js playground: "BugBoard" — fake kanban/project mgmt app
+- [ ] Vite playground: "CrashCafe" — fake coffee ordering app where every drink breaks differently
+- [ ] Each looks like a real product for compelling screenshots/demos
+
+### Workstream 7: Polish for publish
 - [ ] Ensure `pnpm pack` produces clean tarball
 - [ ] Verify subpath exports work from a consuming project
 - [ ] Add bin entry for CLI (`npx agent-replay dev`)
