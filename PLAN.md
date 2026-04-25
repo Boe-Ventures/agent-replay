@@ -10,12 +10,15 @@ _Orion orchestrates. Sub-agents execute. Kristian reviews when ready._
 - [x] Fixed: playground port, summary persistence bug
 - [x] CLI summary/errors/network all work
 
-### Workstream 2: Network interception deep-dive
-- [ ] Research PostHog/Sentry/Amplitude source code for how they intercept fetch/XHR
-- [ ] Handle: request/response bodies, headers, timing, status codes, streaming responses
-- [ ] Handle: failed requests (network errors, CORS failures, timeouts)
-- [ ] Ensure sidecar's own requests are excluded from capture
-- [ ] Test against real apps (Homi localhost)
+### Workstream 2: Network interception deep-dive ✅ DONE
+- [x] Research: PostHog (custom rrweb plugin, fetch/XHR patching + PerformanceObserver), Sentry (breadcrumb hooks), no official rrweb network plugin exists
+- [x] Implemented: fetch + XHR + WebSocket interception with full request/response body capture
+- [x] PerformanceObserver integration for timing data (transferSize, initiatorType)
+- [x] Handles: streaming responses (500ms timeout), FormData/Blob/ArrayBuffer bodies, all xhr.responseType values
+- [x] Sidecar URL excluded from capture
+- [x] Re-ran experiment: all 3 API bugs now have response bodies visible in network.jsonl
+- [x] Bug 1 (typo): `{"taks":[...]}` directly visible in response body
+- [x] Docs: NETWORK_RESEARCH.md + AGENT_EXPERIMENT.md updated
 
 ### Workstream 3: Vite playground
 - [ ] Add `playground/vite/` — minimal Vite + React app
