@@ -34,10 +34,45 @@ export interface NetworkEntry {
   durationMs: number;
   requestHeaders?: Record<string, string>;
   responseHeaders?: Record<string, string>;
-  requestBody?: unknown;
-  responseBody?: unknown;
+  requestBody?: string; // serialized, truncated if large
+  responseBody?: string; // serialized, truncated if large
+  responseSize?: number; // bytes (content-length or measured)
+  transferSize?: number; // from PerformanceObserver
+  initiatorType?: string; // fetch, xmlhttprequest, script, etc.
   error?: string;
-  initiator: "fetch" | "xhr";
+  isError: boolean;
+  initiator: "fetch" | "xhr" | "websocket";
+}
+
+export interface WebSocketEntry {
+  timestamp: number;
+  offsetMs: number;
+  url: string;
+  direction: "send" | "receive" | "open" | "close" | "error";
+  data?: string; // message payload, truncated if large
+  code?: number; // close code
+  reason?: string; // close reason
+}
+
+// ── Network Configuration ────────────────────────────────
+
+export interface NetworkConfig {
+  /** Capture request bodies. Default: true */
+  captureRequestBody?: boolean;
+  /** Capture response bodies. Default: true */
+  captureResponseBody?: boolean;
+  /** Capture request/response headers. Default: true */
+  captureHeaders?: boolean;
+  /** Capture WebSocket messages. Default: true */
+  captureWebSocket?: boolean;
+  /** Max body size in bytes before truncation. Default: 64KB */
+  maxBodySize?: number;
+  /** Max WebSocket message size in bytes. Default: 16KB */
+  maxWebSocketMessageSize?: number;
+  /** Timeout in ms for reading streaming response bodies. Default: 500 */
+  bodyTimeout?: number;
+  /** URL patterns to exclude from capture */
+  ignoreUrls?: (string | RegExp)[];
 }
 
 export interface ErrorEntry {
@@ -72,6 +107,7 @@ export type AgentReplayEventType =
   | "rrweb"
   | "console"
   | "network"
+  | "websocket"
   | "error"
   | "interaction"
   | "route-change";
@@ -84,6 +120,7 @@ export interface AgentReplayEvent {
     | RRWebEvent
     | ConsoleEntry
     | NetworkEntry
+    | WebSocketEntry
     | ErrorEntry
     | InteractionEntry
     | RouteChangeEntry;
@@ -120,6 +157,8 @@ export interface RecorderConfig {
   sidecarUrl?: string;
   /** Network URL patterns to ignore */
   ignoreNetworkPatterns?: (string | RegExp)[];
+  /** Fine-grained network capture config */
+  networkConfig?: NetworkConfig;
 }
 
 // ── Transport ────────────────────────────────────────────

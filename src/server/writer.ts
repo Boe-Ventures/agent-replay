@@ -6,6 +6,7 @@ import type {
   SessionMetadata,
   ConsoleEntry,
   NetworkEntry,
+  WebSocketEntry,
   ErrorEntry,
 } from "../core/types.js";
 
@@ -71,6 +72,9 @@ export class SessionWriter {
           break;
         case "network":
           this.appendJsonl("network.jsonl", event.data);
+          break;
+        case "websocket":
+          this.appendJsonl("websocket.jsonl", event.data);
           break;
         case "error":
           this.appendJsonl("errors.jsonl", event.data);
