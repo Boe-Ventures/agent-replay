@@ -5,3 +5,6 @@ dist/
 playground/node_modules/
 playground/.next/
 *.tsbuildinfo
+.env
+*.local
+docs/COMPETITION.md
