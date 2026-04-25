@@ -8,3 +8,4 @@ playground/.next/
 .env
 *.local
 docs/COMPETITION.md
+test-results/
