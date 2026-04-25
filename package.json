@@ -40,7 +40,8 @@
     "typecheck": "tsc --noEmit",
     "dev": "tsc --watch",
     "test": "playwright test",
-    "test:ui": "playwright test --ui"
+    "test:ui": "playwright test --ui",
+    "prepublishOnly": "pnpm typecheck && pnpm build"
   },
   "keywords": [
     "session-recording",
@@ -65,6 +66,15 @@
   },
   "author": "Boe Ventures <hello@boe.ventures> (https://github.com/Boe-Ventures)",
   "license": "MIT",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "@rrweb/rrweb-plugin-console-record": "^2.0.0-alpha.20",
     "@rrweb/types": "^2.0.0-alpha.20",
