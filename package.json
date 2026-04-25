@@ -1,7 +1,7 @@
 {
   "name": "@boe-ventures/agent-replay",
   "version": "0.1.0",
-  "description": "Local session recording for AI-assisted development",
+  "description": "Local session recording for AI coding agents — captures DOM mutations, console logs, network requests, and errors from your dev server into structured JSONL files that agents can read directly",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -10,34 +10,29 @@
   },
   "exports": {
     ".": {
-      "import": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
-      }
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./react": {
-      "import": {
-        "types": "./dist/react/index.d.ts",
-        "default": "./dist/react/index.js"
-      }
+      "types": "./dist/react/index.d.ts",
+      "import": "./dist/react/index.js",
+      "default": "./dist/react/index.js"
     },
     "./next": {
-      "import": {
-        "types": "./dist/next/index.d.ts",
-        "default": "./dist/next/index.js"
-      }
+      "types": "./dist/next/index.d.ts",
+      "import": "./dist/next/index.js",
+      "default": "./dist/next/index.js"
     },
     "./server": {
-      "import": {
-        "types": "./dist/server/index.d.ts",
-        "default": "./dist/server/index.js"
-      }
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js",
+      "default": "./dist/server/index.js"
     },
     "./cli": {
-      "import": {
-        "types": "./dist/cli/index.d.ts",
-        "default": "./dist/cli/index.js"
-      }
+      "types": "./dist/cli/index.d.ts",
+      "import": "./dist/cli/index.js",
+      "default": "./dist/cli/index.js"
     }
   },
   "scripts": {
@@ -46,14 +41,27 @@
     "dev": "tsc --watch"
   },
   "keywords": [
-    "rrweb",
     "session-recording",
-    "ai",
-    "agent",
+    "rrweb",
+    "ai-agent",
     "developer-tools",
-    "debugging"
+    "debugging",
+    "console-log",
+    "network-capture",
+    "react",
+    "nextjs",
+    "local-development",
+    "devtools"
   ],
-  "author": "Boe Ventures",
+  "homepage": "https://boe-ventures.github.io/agent-replay",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Boe-Ventures/agent-replay.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Boe-Ventures/agent-replay/issues"
+  },
+  "author": "Boe Ventures <hello@boe.ventures> (https://github.com/Boe-Ventures)",
   "license": "MIT",
   "dependencies": {
     "rrweb": "^2.0.0-alpha.4",

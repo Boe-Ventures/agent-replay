@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Replay — Local Session Recording for AI-Assisted Development</title>
+  <meta name="description" content="Give your AI coding agent real observability into your running web app. Captures DOM mutations, console logs, network requests, and errors into structured JSONL files.">
+  <meta name="keywords" content="session recording, rrweb, ai agent, developer tools, debugging, console capture, network capture, react, nextjs, devtools, coding agent">
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="Agent Replay">
+  <meta property="og:description" content="Local session recording for AI-assisted development. Structured data instead of screenshots.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://boe-ventures.github.io/agent-replay/">
+
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Agent Replay">
+  <meta name="twitter:description" content="Local session recording for AI-assisted development. Structured data instead of screenshots.">
+
+  <style>
+    :root {
+      --bg: #09090b;
+      --fg: #fafafa;
+      --muted: #71717a;
+      --accent: #a78bfa;
+      --accent-hover: #c4b5fd;
+      --accent-dim: rgba(167, 139, 250, 0.1);
+      --border: #27272a;
+      --card-bg: #18181b;
+      --code-bg: #1a1a1e;
+      --green: #4ade80;
+      --red: #f87171;
+      --yellow: #fbbf24;
+      --blue: #60a5fa;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { color: var(--accent-hover); }
+
+    code {
+      font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
+      font-size: 0.875em;
+    }
+
+    /* ─── Header ─── */
+    header {
+      padding: 64px 0 48px;
+      text-align: center;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .logo {
+      font-size: 3rem;
+      margin-bottom: 8px;
+    }
+
+    header h1 {
+      font-size: 2.5rem;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      margin-bottom: 12px;
+      background: linear-gradient(135deg, var(--fg), var(--accent));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    header p.tagline {
+      color: var(--muted);
+      font-size: 1.2rem;
+      max-width: 540px;
+      margin: 0 auto 24px;
+    }
+
+    .badges {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 32px;
+    }
+
+    .badges img { height: 22px; }
+
+    /* ─── Install ─── */
+    .install-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 20px;
+      cursor: pointer;
+      transition: border-color 0.2s;
+    }
+
+    .install-wrap:hover { border-color: var(--accent); }
+
+    .install-cmd {
+      color: var(--green);
+      font-size: 0.95rem;
+      user-select: all;
+    }
+
+    .copy-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 1rem;
+      padding: 4px;
+      transition: color 0.2s;
+    }
+
+    .copy-btn:hover { color: var(--fg); }
+
+    /* ─── Problem / Solution ─── */
+    .problem-section {
+      padding: 64px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .problem-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 32px;
+      margin-top: 24px;
+    }
+
+    .problem-card {
+      padding: 24px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+    }
+
+    .problem-card.bad {
+      background: rgba(248, 113, 113, 0.05);
+      border-color: rgba(248, 113, 113, 0.2);
+    }
+
+    .problem-card.good {
+      background: rgba(74, 222, 128, 0.05);
+      border-color: rgba(74, 222, 128, 0.2);
+    }
+
+    .problem-card h3 {
+      font-size: 1.1rem;
+      margin-bottom: 12px;
+    }
+
+    .problem-card.bad h3 { color: var(--red); }
+    .problem-card.good h3 { color: var(--green); }
+
+    .problem-card ul {
+      list-style: none;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    .problem-card ul li {
+      padding: 4px 0;
+      padding-left: 20px;
+      position: relative;
+    }
+
+    .problem-card.bad ul li::before {
+      content: "✕";
+      position: absolute;
+      left: 0;
+      color: var(--red);
+    }
+
+    .problem-card.good ul li::before {
+      content: "✓";
+      position: absolute;
+      left: 0;
+      color: var(--green);
+    }
+
+    /* ─── Features ─── */
+    .features {
+      padding: 64px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .section-title {
+      font-size: 1.6rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .section-subtitle {
+      color: var(--muted);
+      margin-bottom: 32px;
+      font-size: 1.05rem;
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+
+    .feature-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+
+    .feature-card:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+    }
+
+    .feature-icon {
+      font-size: 1.6rem;
+      margin-bottom: 12px;
+    }
+
+    .feature-card h3 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+
+    .feature-card p {
+      color: var(--muted);
+      font-size: 0.875rem;
+      line-height: 1.5;
+    }
+
+    .badge-soon {
+      display: inline-block;
+      font-size: 0.7rem;
+      background: var(--accent-dim);
+      color: var(--accent);
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-left: 6px;
+      font-weight: 600;
+      vertical-align: middle;
+    }
+
+    /* ─── Architecture ─── */
+    .architecture {
+      padding: 64px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .arch-diagram {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 32px;
+      overflow-x: auto;
+      margin-top: 24px;
+    }
+
+    .arch-diagram pre {
+      color: var(--muted);
+      font-size: 0.85rem;
+      line-height: 1.7;
+      white-space: pre;
+    }
+
+    .arch-diagram .hl { color: var(--accent); }
+    .arch-diagram .gr { color: var(--green); }
+    .arch-diagram .yl { color: var(--yellow); }
+    .arch-diagram .bl { color: var(--blue); }
+
+    /* ─── Code Examples ─── */
+    .code-section {
+      padding: 64px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .code-examples {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin-top: 24px;
+    }
+
+    .code-block {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .code-block-header {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.8rem;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .code-block-header .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .code-block pre {
+      padding: 16px;
+      overflow-x: auto;
+      font-size: 0.82rem;
+      line-height: 1.6;
+      color: #d4d4d8;
+    }
+
+    .code-block .kw { color: #c084fc; }
+    .code-block .str { color: #86efac; }
+    .code-block .cm { color: #52525b; }
+    .code-block .fn { color: #93c5fd; }
+    .code-block .tag { color: #f87171; }
+    .code-block .attr { color: #fbbf24; }
+
+    /* ─── Agent Workflow ─── */
+    .workflow {
+      padding: 64px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .workflow-steps {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-top: 24px;
+    }
+
+    .workflow-step {
+      text-align: center;
+      padding: 24px 16px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      position: relative;
+    }
+
+    .workflow-step .step-num {
+      font-size: 0.75rem;
+      color: var(--accent);
+      font-weight: 700;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .workflow-step .step-icon {
+      font-size: 1.8rem;
+      margin-bottom: 8px;
+    }
+
+    .workflow-step h4 {
+      font-size: 0.9rem;
+      margin-bottom: 4px;
+    }
+
+    .workflow-step p {
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    .workflow-step::after {
+      content: "→";
+      position: absolute;
+      right: -14px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--border);
+      font-size: 1.2rem;
+      z-index: 1;
+    }
+
+    .workflow-step:last-child::after { content: ""; }
+
+    /* ─── Output ─── */
+    .output-section {
+      padding: 64px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .file-tree {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      font-size: 0.875rem;
+      line-height: 1.8;
+      margin-top: 24px;
+    }
+
+    .file-tree .dir { color: var(--accent); }
+    .file-tree .file { color: var(--muted); }
+    .file-tree .desc { color: #52525b; font-style: italic; }
+
+    /* ─── CTA / Links ─── */
+    .cta {
+      padding: 64px 0;
+      text-align: center;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .cta h2 {
+      font-size: 1.8rem;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+
+    .cta p {
+      color: var(--muted);
+      margin-bottom: 32px;
+      font-size: 1.05rem;
+    }
+
+    .cta-links {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .cta-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 24px;
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 0.95rem;
+      transition: all 0.2s;
+    }
+
+    .cta-link.primary {
+      background: var(--accent);
+      color: var(--bg);
+    }
+
+    .cta-link.primary:hover {
+      background: var(--accent-hover);
+      color: var(--bg);
+    }
+
+    .cta-link.secondary {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      color: var(--fg);
+    }
+
+    .cta-link.secondary:hover {
+      border-color: var(--accent);
+    }
+
+    /* ─── Footer ─── */
+    footer {
+      padding: 32px 0;
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    footer a { color: var(--muted); }
+    footer a:hover { color: var(--fg); }
+
+    /* ─── Responsive ─── */
+    @media (max-width: 768px) {
+      header { padding: 40px 0 32px; }
+      header h1 { font-size: 1.8rem; }
+      header p.tagline { font-size: 1rem; }
+
+      .problem-grid,
+      .code-examples {
+        grid-template-columns: 1fr;
+      }
+
+      .feature-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .workflow-steps {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .workflow-step::after { content: "" !important; }
+    }
+
+    @media (max-width: 480px) {
+      .feature-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .workflow-steps {
+        grid-template-columns: 1fr;
+      }
+
+      .install-wrap {
+        width: 100%;
+        justify-content: space-between;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <header>
+    <div class="container">
+      <div class="logo">🎥</div>
+      <h1>Agent Replay</h1>
+      <p class="tagline">Local session recording for AI-assisted development. Give your coding agent the same observability a human gets — structured, programmatic, and cheap.</p>
+
+      <div class="badges">
+        <a href="https://www.npmjs.com/package/@boe-ventures/agent-replay"><img src="https://img.shields.io/npm/v/@boe-ventures/agent-replay.svg" alt="npm version"></a>
+        <a href="https://github.com/Boe-Ventures/agent-replay"><img src="https://img.shields.io/github/stars/Boe-Ventures/agent-replay.svg?style=social" alt="GitHub stars"></a>
+        <a href="https://github.com/Boe-Ventures/agent-replay/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License"></a>
+        <img src="https://img.shields.io/badge/TypeScript-5.7-blue.svg" alt="TypeScript">
+      </div>
+
+      <div class="install-wrap" onclick="copyInstall()">
+        <code class="install-cmd">npm install @boe-ventures/agent-replay</code>
+        <button class="copy-btn" title="Copy to clipboard" id="copyBtn">📋</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Problem / Solution -->
+  <section class="problem-section">
+    <div class="container">
+      <h2 class="section-title">The Problem</h2>
+      <p class="section-subtitle">AI agents debug by screenshot. That's expensive, slow, and lossy.</p>
+
+      <div class="problem-grid">
+        <div class="problem-card bad">
+          <h3>Screenshots → Vision Model</h3>
+          <ul>
+            <li>Can't see console errors</li>
+            <li>Can't see network failures</li>
+            <li>Can't see timing or state</li>
+            <li>Expensive vision model per frame</li>
+            <li>Slow round-trip per screenshot</li>
+          </ul>
+        </div>
+        <div class="problem-card good">
+          <h3>Agent Replay → Structured Data</h3>
+          <ul>
+            <li>Every console log and error</li>
+            <li>Every network request + response</li>
+            <li>Full DOM state via rrweb</li>
+            <li>Cheap — just files on disk</li>
+            <li>Instant — read a JSONL file</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section class="features">
+    <div class="container">
+      <h2 class="section-title">Features</h2>
+      <p class="section-subtitle">Everything that happens in the browser, captured and structured.</p>
+
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="feature-icon">🎥</div>
+          <h3>DOM Recording</h3>
+          <p>rrweb-powered. Captures every mutation, scroll, resize, and interaction. Full page reconstruction from events.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📊</div>
+          <h3>Console Capture</h3>
+          <p>Logs, warnings, errors with full stack traces. Separate <code>console.jsonl</code> so agents can scan quickly.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🌐</div>
+          <h3>Network Capture</h3>
+          <p>Every fetch and XHR — URL, method, status, timing, request/response bodies. Spot API failures instantly.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">⚛️</div>
+          <h3>React Provider</h3>
+          <p>Drop in <code>&lt;AgentReplayProvider&gt;</code> and you're done. Auto-disabled in production. Zero config.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🤖</div>
+          <h3>Agent-Optimized</h3>
+          <p>Structured JSONL files, separate per signal. LLM-friendly <code>summary.md</code>. No context exhaustion.</p>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🧩</div>
+          <h3>Chrome Extension <span class="badge-soon">Soon</span></h3>
+          <p>Zero-config recording for any site. No code changes needed. Perfect for testing third-party apps.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Architecture -->
+  <section class="architecture">
+    <div class="container">
+      <h2 class="section-title">Architecture</h2>
+      <p class="section-subtitle">Browser captures events → sidecar writes files → agent reads what it needs.</p>
+
+      <div class="arch-diagram">
+<pre>
+  <span class="yl">┌─────────────────────────────────┐</span>
+  <span class="yl">│</span>  <span class="yl">Browser</span> (localhost:3000)        <span class="yl">│</span>
+  <span class="yl">│</span>                                 <span class="yl">│</span>
+  <span class="yl">│</span>  AgentReplayProvider captures:  <span class="yl">│</span>
+  <span class="yl">│</span>  • DOM mutations  <span class="cm">(rrweb)</span>       <span class="yl">│</span>
+  <span class="yl">│</span>  • Console logs   <span class="cm">(plugin)</span>     <span class="yl">│</span>
+  <span class="yl">│</span>  • Network reqs   <span class="cm">(plugin)</span>     <span class="yl">│</span>
+  <span class="yl">│</span>  • Errors         <span class="cm">(window)</span>     <span class="yl">│</span>
+  <span class="yl">└────────────────┬────────────────┘</span>
+                   │
+                   ▼
+  <span class="bl">┌─────────────────────────────────┐</span>
+  <span class="bl">│</span>  <span class="bl">Sidecar</span> / API Route             <span class="bl">│</span>
+  <span class="bl">│</span>  Receives events via POST/WS    <span class="bl">│</span>
+  <span class="bl">└────────────────┬────────────────┘</span>
+                   │
+                   ▼
+  <span class="gr">┌─────────────────────────────────┐</span>
+  <span class="gr">│</span>  <span class="gr">.agent-replay/</span>                  <span class="gr">│</span>
+  <span class="gr">│</span>  sessions/&lt;timestamp&gt;/          <span class="gr">│</span>
+  <span class="gr">│</span>    events.jsonl                 <span class="gr">│</span>
+  <span class="gr">│</span>    console.jsonl                <span class="gr">│</span>
+  <span class="gr">│</span>    network.jsonl                <span class="gr">│</span>
+  <span class="gr">│</span>    errors.jsonl                 <span class="gr">│</span>
+  <span class="gr">│</span>    summary.md                   <span class="gr">│</span>
+  <span class="gr">└────────────────┬────────────────┘</span>
+                   │
+          ┌────────┴────────┐
+          ▼                 ▼
+  <span class="hl">🤖 Agent reads</span>      <span class="hl">👀 Human replays</span>
+  structured files    video playback
+</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- Code Examples -->
+  <section class="code-section">
+    <div class="container">
+      <h2 class="section-title">Quick Start</h2>
+      <p class="section-subtitle">Add the provider. That's it.</p>
+
+      <div class="code-examples">
+        <div class="code-block">
+          <div class="code-block-header">
+            <span class="dot" style="background: var(--blue)"></span>
+            app/layout.tsx
+          </div>
+<pre><span class="cm">// Drop into your root layout</span>
+<span class="kw">import</span> { <span class="fn">AgentReplayProvider</span> }
+  <span class="kw">from</span> <span class="str">"@boe-ventures/agent-replay/react"</span>;
+
+<span class="kw">export default function</span> <span class="fn">Layout</span>({ children }) {
+  <span class="kw">return</span> (
+    <span class="tag">&lt;html&gt;</span>
+      <span class="tag">&lt;body&gt;</span>
+        <span class="tag">&lt;<span class="fn">AgentReplayProvider</span>&gt;</span>
+          {children}
+        <span class="tag">&lt;/<span class="fn">AgentReplayProvider</span>&gt;</span>
+      <span class="tag">&lt;/body&gt;</span>
+    <span class="tag">&lt;/html&gt;</span>
+  );
+}
+
+<span class="cm">// Auto-disabled in production.</span>
+<span class="cm">// Zero runtime cost when off.</span></pre>
+        </div>
+
+        <div class="code-block">
+          <div class="code-block-header">
+            <span class="dot" style="background: var(--green)"></span>
+            Agent reads the output
+          </div>
+<pre><span class="cm"># Check for errors (highest signal)</span>
+<span class="fn">cat</span> .agent-replay/latest/errors.jsonl
+
+<span class="cm"># Get a text summary</span>
+<span class="fn">npx</span> agent-replay summary
+
+<span class="cm"># Check network failures</span>
+<span class="fn">npx</span> agent-replay network --failures
+
+<span class="cm"># Watch events in real-time</span>
+<span class="fn">npx</span> agent-replay watch
+
+<span class="cm"># Output structure:</span>
+<span class="cm"># .agent-replay/latest/</span>
+<span class="cm">#   errors.jsonl   ← read this first</span>
+<span class="cm">#   console.jsonl  ← logs + warnings</span>
+<span class="cm">#   network.jsonl  ← API calls</span>
+<span class="cm">#   summary.md     ← LLM-friendly</span></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Agent Workflow -->
+  <section class="workflow">
+    <div class="container">
+      <h2 class="section-title">How Agents Use It</h2>
+      <p class="section-subtitle">Complete observability when paired with browser automation.</p>
+
+      <div class="workflow-steps">
+        <div class="workflow-step">
+          <div class="step-num">Step 1</div>
+          <div class="step-icon">✍️</div>
+          <h4>Agent writes code</h4>
+          <p>Makes changes to your codebase</p>
+        </div>
+        <div class="workflow-step">
+          <div class="step-num">Step 2</div>
+          <div class="step-icon">🔄</div>
+          <h4>Dev server reloads</h4>
+          <p>Agent Replay starts capturing</p>
+        </div>
+        <div class="workflow-step">
+          <div class="step-num">Step 3</div>
+          <div class="step-icon">🤖</div>
+          <h4>Agent tests with browser</h4>
+          <p>agent-browser clicks + navigates</p>
+        </div>
+        <div class="workflow-step">
+          <div class="step-num">Step 4</div>
+          <div class="step-icon">📊</div>
+          <h4>Agent reads results</h4>
+          <p>errors.jsonl → fix → repeat</p>
+        </div>
+      </div>
+
+      <div class="code-block" style="margin-top: 24px;">
+        <div class="code-block-header">
+          <span class="dot" style="background: var(--accent)"></span>
+          agent-browser + agent-replay workflow
+        </div>
+<pre><span class="cm"># agent-browser: the outside view (what's on screen)</span>
+<span class="fn">agent-browser</span> open http://localhost:3000
+<span class="fn">agent-browser</span> snapshot   <span class="cm"># accessibility tree + element refs</span>
+<span class="fn">agent-browser</span> click <span class="attr">@e3</span>  <span class="cm"># interact with elements</span>
+
+<span class="cm"># agent-replay: the inside view (what happened under the hood)</span>
+<span class="fn">cat</span> .agent-replay/latest/errors.jsonl    <span class="cm"># "TypeError at checkout.tsx:47"</span>
+<span class="fn">cat</span> .agent-replay/latest/network.jsonl   <span class="cm"># "POST /api/checkout → 500"</span>
+<span class="fn">cat</span> .agent-replay/latest/console.jsonl   <span class="cm"># "Warning: cart.items is empty"</span>
+
+<span class="cm"># Together: complete observability without screenshots or vision models.</span></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- Output Structure -->
+  <section class="output-section">
+    <div class="container">
+      <h2 class="section-title">Output Structure</h2>
+      <p class="section-subtitle">Separate files per signal. Agent picks what it needs.</p>
+
+      <div class="file-tree">
+<pre><span class="dir">.agent-replay/</span>
+├── <span class="dir">sessions/</span>
+│   └── <span class="dir">2026-04-25T1430Z/</span>
+│       ├── <span class="file">events.jsonl</span>       <span class="desc">← Full rrweb event stream</span>
+│       ├── <span class="file">console.jsonl</span>      <span class="desc">← Console logs, warnings, errors</span>
+│       ├── <span class="file">network.jsonl</span>      <span class="desc">← Fetch/XHR with timing + bodies</span>
+│       ├── <span class="file">errors.jsonl</span>       <span class="desc">← Errors only (read this first!)</span>
+│       ├── <span class="file">react-tree.json</span>    <span class="desc">← Component tree snapshot</span>
+│       └── <span class="file">summary.md</span>         <span class="desc">← LLM-friendly text summary</span>
+└── <span class="dir">latest</span> → sessions/2026-04-25T1430Z/</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="cta">
+    <div class="container">
+      <h2>Start recording</h2>
+      <p>One provider. Zero config. All the observability your agent needs.</p>
+
+      <div class="cta-links">
+        <a href="https://www.npmjs.com/package/@boe-ventures/agent-replay" class="cta-link primary">
+          📦 npm
+        </a>
+        <a href="https://github.com/Boe-Ventures/agent-replay" class="cta-link secondary">
+          ⭐ GitHub
+        </a>
+        <a href="https://github.com/Boe-Ventures/agent-replay/blob/main/README.md" class="cta-link secondary">
+          📖 Docs
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="container">
+      <p>MIT License · <a href="https://github.com/Boe-Ventures">Boe Ventures</a></p>
+    </div>
+  </footer>
+
+  <script>
+    function copyInstall() {
+      navigator.clipboard.writeText('npm install @boe-ventures/agent-replay').then(() => {
+        const btn = document.getElementById('copyBtn');
+        btn.textContent = '✅';
+        setTimeout(() => btn.textContent = '📋', 2000);
+      });
+    }
+  </script>
+
+</body>
+</html>

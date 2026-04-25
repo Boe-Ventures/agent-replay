@@ -1,5 +1,10 @@
 # @boe-ventures/agent-replay
 
+[![npm version](https://img.shields.io/npm/v/@boe-ventures/agent-replay.svg)](https://www.npmjs.com/package/@boe-ventures/agent-replay)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
+[![GitHub stars](https://img.shields.io/github/stars/Boe-Ventures/agent-replay.svg?style=social)](https://github.com/Boe-Ventures/agent-replay)
+
 Local session recording for AI-assisted development. Gives coding agents the same observability into a running web app that a human developer gets — console errors, network requests, DOM state, React component tree — but structured, programmatic, and cheap.
 
 ## Why
