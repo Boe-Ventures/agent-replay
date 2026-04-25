@@ -1,0 +1,83 @@
+{
+  "name": "@boe-ventures/agent-replay",
+  "version": "0.1.0",
+  "description": "Local session recording for AI-assisted development",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "agent-replay": "./dist/cli/index.js"
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    },
+    "./react": {
+      "import": {
+        "types": "./dist/react/index.d.ts",
+        "default": "./dist/react/index.js"
+      }
+    },
+    "./next": {
+      "import": {
+        "types": "./dist/next/index.d.ts",
+        "default": "./dist/next/index.js"
+      }
+    },
+    "./server": {
+      "import": {
+        "types": "./dist/server/index.d.ts",
+        "default": "./dist/server/index.js"
+      }
+    },
+    "./cli": {
+      "import": {
+        "types": "./dist/cli/index.d.ts",
+        "default": "./dist/cli/index.js"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsc --watch"
+  },
+  "keywords": [
+    "rrweb",
+    "session-recording",
+    "ai",
+    "agent",
+    "developer-tools",
+    "debugging"
+  ],
+  "author": "Boe Ventures",
+  "license": "MIT",
+  "dependencies": {
+    "rrweb": "^2.0.0-alpha.4",
+    "@rrweb/types": "^2.0.0-alpha.20",
+    "@rrweb/rrweb-plugin-console-record": "^2.0.0-alpha.20",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "react": "^19.0.0",
+    "next": "^15.0.0"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0",
+    "next": ">=14.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "next": {
+      "optional": true
+    }
+  }
+}
