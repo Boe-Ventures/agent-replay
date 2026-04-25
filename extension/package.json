@@ -1,0 +1,33 @@
+{
+  "name": "@boe-ventures/agent-replay-extension",
+  "displayName": "Agent Replay",
+  "description": "Zero-config session recording for localhost — captures DOM, console, network for AI coding agents",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "dev:firefox": "wxt -b firefox",
+    "build": "wxt build",
+    "build:firefox": "wxt build -b firefox",
+    "zip": "wxt zip",
+    "zip:firefox": "wxt zip -b firefox",
+    "typecheck": "tsc --noEmit",
+    "postinstall": "wxt prepare"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "rrweb": "^2.0.0-alpha.4",
+    "@rrweb/rrweb-plugin-console-record": "^2.0.0-alpha.20",
+    "@rrweb/types": "^2.0.0-alpha.20"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/chrome": "^0.0.300",
+    "@wxt-dev/module-react": "^1.1.5",
+    "typescript": "^5.7.0",
+    "wxt": "^0.20.17"
+  }
+}

@@ -156,6 +156,42 @@ npx agent-replay video .agent-replay/latest
 npx agent-replay frames .agent-replay/latest --fps 1
 ```
 
+## Chrome Extension (zero-config)
+
+The Chrome extension records any `localhost` page automatically — no npm install, no provider component, no code changes.
+
+### Install from source
+
+```bash
+cd extension
+pnpm install
+pnpm build
+```
+
+Then load in Chrome:
+1. Open `chrome://extensions`
+2. Enable "Developer mode"
+3. Click "Load unpacked"
+4. Select `extension/.output/chrome-mv3/`
+
+### What it does
+
+- Auto-injects rrweb + console/network recording on `localhost:*` and `127.0.0.1:*`
+- Streams events to the sidecar server (`npx agent-replay dev`) every 2 seconds
+- Shows recording status, event count, and sidecar connection in the popup
+- Badge shows "REC" on tabs being recorded
+
+### Works with the npm package
+
+If `<AgentReplayProvider>` is already active on the page (sets `window.__AGENT_REPLAY_ACTIVE__`), the extension defers — no double recording. Both write to the same `.agent-replay/` directory via the sidecar.
+
+### Development
+
+```bash
+cd extension
+pnpm dev  # starts WXT dev mode with hot reload
+```
+
 ## Design principles
 
 - **Local-first.** No cloud, no accounts, no telemetry. Files on disk.

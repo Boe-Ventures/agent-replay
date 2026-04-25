@@ -9,3 +9,8 @@ playground/.next/
 *.local
 docs/COMPETITION.md
 test-results/
+
+# Extension
+extension/.output/
+extension/.wxt/
+extension/node_modules/
