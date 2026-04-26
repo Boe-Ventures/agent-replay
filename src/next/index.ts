@@ -1,2 +1,2 @@
 export { withAgentReplay } from "./plugin.js";
-export { POST } from "./api-route.js";
+export { POST, GET } from "./api-route.js";

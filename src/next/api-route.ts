@@ -10,11 +10,6 @@ interface NextRequest {
   json: () => Promise<unknown>;
 }
 
-interface NextResponseInit {
-  status?: number;
-  headers?: Record<string, string>;
-}
-
 /**
  * Next.js App Router API route handler for receiving agent-replay events.
  *
@@ -68,4 +63,25 @@ export async function POST(request: NextRequest): Promise<Response> {
       }
     );
   }
+}
+
+/**
+ * Health check endpoint for the Next.js API route.
+ *
+ * Usage in `app/api/__agent-replay/health/route.ts`:
+ * ```ts
+ * export { GET } from "@boe-ventures/agent-replay/next";
+ * ```
+ */
+export async function GET(): Promise<Response> {
+  return new Response(
+    JSON.stringify({
+      status: "ok",
+      activeSessions: activeSessions.size,
+    }),
+    {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }
+  );
 }
