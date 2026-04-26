@@ -126,6 +126,30 @@ export interface AgentReplayEvent {
     | RouteChangeEntry;
 }
 
+// ── Filter Config ────────────────────────────────────────
+
+export interface FilterConfig {
+  /** Filter console entries before sending. Return false to skip, or mutate the entry. */
+  filterConsole?: (entry: ConsoleEntry) => boolean;
+  /** Filter network entries before sending. Return false to skip, or mutate the entry (e.g. truncate bodies). */
+  filterNetwork?: (entry: NetworkEntry) => boolean;
+  /** Filter error entries before sending. Return false to skip. */
+  filterError?: (entry: ErrorEntry) => boolean;
+  /** Max body size in bytes for network request/response bodies. Default 4096. Bodies exceeding this are truncated with ...[truncated] */
+  maxBodySize?: number;
+}
+
+// ── Cleanup Config ───────────────────────────────────────
+
+export interface CleanupConfig {
+  /** Max number of sessions to keep. Default 5. */
+  maxSessions?: number;
+  /** Max age in hours for sessions. Default 24. */
+  maxAgeHours?: number;
+  /** If true, never auto-delete sessions. Default false. */
+  preserveLogs?: boolean;
+}
+
 // ── Config ───────────────────────────────────────────────
 
 export interface RecorderConfig {
@@ -159,6 +183,8 @@ export interface RecorderConfig {
   ignoreNetworkPatterns?: (string | RegExp)[];
   /** Fine-grained network capture config */
   networkConfig?: NetworkConfig;
+  /** Filter callbacks for events before they are batched/sent */
+  filters?: FilterConfig;
 }
 
 // ── Transport ────────────────────────────────────────────
@@ -187,6 +213,7 @@ export interface SidecarConfig {
   host?: string;
   writerConfig?: WriterConfig;
   corsOrigins?: string[];
+  cleanupConfig?: CleanupConfig;
 }
 
 // ── Summary ──────────────────────────────────────────────

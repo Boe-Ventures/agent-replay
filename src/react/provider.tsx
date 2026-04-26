@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import type { RecorderConfig } from "../core/types.js";
+import type { RecorderConfig, ConsoleEntry, NetworkEntry, ErrorEntry } from "../core/types.js";
 import { startRecording, stopRecording } from "../core/recorder.js";
 import { PostTransport } from "../core/transport.js";
 import { getOrCreateSession } from "../core/session.js";
@@ -20,6 +20,14 @@ export interface AgentReplayProviderProps {
   sessionId?: string;
   /** Additional recorder config */
   config?: Partial<RecorderConfig>;
+  /** Filter console entries before sending. Return false to skip, or mutate the entry. */
+  filterConsole?: (entry: ConsoleEntry) => boolean;
+  /** Filter network entries before sending. Return false to skip, or mutate the entry (e.g. truncate bodies). */
+  filterNetwork?: (entry: NetworkEntry) => boolean;
+  /** Filter error entries before sending. Return false to skip. */
+  filterError?: (entry: ErrorEntry) => boolean;
+  /** Max body size in bytes for network request/response bodies. Default 4096. Bodies exceeding this are truncated with ...[truncated] */
+  maxBodySize?: number;
 }
 
 declare global {
@@ -36,6 +44,10 @@ export function AgentReplayProvider({
   captureNetwork = true,
   sessionId,
   config = {},
+  filterConsole,
+  filterNetwork,
+  filterError,
+  maxBodySize,
 }: AgentReplayProviderProps) {
   const initialized = useRef(false);
 
@@ -88,6 +100,13 @@ export function AgentReplayProvider({
           sidecarUrl,
           "__agent-replay",
         ],
+        filters: {
+          ...config.filters,
+          ...(filterConsole && { filterConsole }),
+          ...(filterNetwork && { filterNetwork }),
+          ...(filterError && { filterError }),
+          ...(maxBodySize != null && { maxBodySize }),
+        },
       },
       transport
     );

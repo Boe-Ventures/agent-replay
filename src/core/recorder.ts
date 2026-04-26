@@ -7,11 +7,15 @@ import type {
   NetworkEntry,
   WebSocketEntry,
   ErrorEntry,
+  FilterConfig,
   Transport,
 } from "./types.js";
 import { getOrCreateSession } from "./session.js";
 
 type EventCallback = (event: AgentReplayEvent) => void;
+
+/** Default max body size for filter truncation (bytes) */
+const DEFAULT_FILTER_MAX_BODY_SIZE = 4096;
 
 interface RecorderState {
   rrwebStop: (() => void) | null;
@@ -21,6 +25,7 @@ interface RecorderState {
   buffer: AgentReplayEvent[];
   flushTimer: ReturnType<typeof setInterval> | null;
   transport: Transport | null;
+  filters: FilterConfig;
   config: Required<
     Pick<
       RecorderConfig,
@@ -40,8 +45,51 @@ function getSessionStart(): number {
   return new Date(session.startedAt).getTime();
 }
 
+/** Truncate a body string for filter-level maxBodySize */
+function truncateFilterBody(value: string | undefined, maxBytes: number): string | undefined {
+  if (value == null) return value;
+  if (value.length <= maxBytes) return value;
+  return value.slice(0, maxBytes) + "...[truncated]";
+}
+
+/** Apply filters to an event. Returns false if the event should be dropped. */
+function applyFilters(event: AgentReplayEvent, filters: FilterConfig): boolean {
+  const maxBody = filters.maxBodySize ?? DEFAULT_FILTER_MAX_BODY_SIZE;
+
+  switch (event.type) {
+    case "console": {
+      if (filters.filterConsole) {
+        return filters.filterConsole(event.data as ConsoleEntry);
+      }
+      return true;
+    }
+    case "network": {
+      // Apply maxBodySize truncation before user filter
+      const entry = event.data as NetworkEntry;
+      entry.requestBody = truncateFilterBody(entry.requestBody, maxBody);
+      entry.responseBody = truncateFilterBody(entry.responseBody, maxBody);
+      if (filters.filterNetwork) {
+        return filters.filterNetwork(entry);
+      }
+      return true;
+    }
+    case "error": {
+      if (filters.filterError) {
+        return filters.filterError(event.data as ErrorEntry);
+      }
+      return true;
+    }
+    default:
+      return true;
+  }
+}
+
 function emit(event: AgentReplayEvent): void {
   if (!state) return;
+
+  // Apply filters — drop event if filter returns false
+  if (!applyFilters(event, state.filters)) return;
+
   state.buffer.push(event);
   for (const cb of state.listeners) cb(event);
   if (state.buffer.length >= state.config.batchSize) {
@@ -791,6 +839,7 @@ export async function startRecording(
     buffer: [],
     flushTimer: null,
     transport: transport ?? null,
+    filters: config.filters ?? {},
     config: resolvedConfig,
   };
 

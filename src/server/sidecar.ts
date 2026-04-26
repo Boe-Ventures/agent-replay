@@ -2,6 +2,7 @@ import * as http from "node:http";
 import * as crypto from "node:crypto";
 import type {
   SidecarConfig,
+  CleanupConfig,
   AgentReplayEvent,
   SessionMetadata,
 } from "../core/types.js";
@@ -61,6 +62,7 @@ export function createSidecar(config: SidecarConfig = {}): {
   stop: () => Promise<void>;
 } {
   const writer = new SessionWriter(config.writerConfig);
+  const cleanupConfig = config.cleanupConfig;
   const activeSessions = new Map<string, boolean>();
 
   const server = http.createServer(async (req, res) => {
@@ -103,6 +105,10 @@ export function createSidecar(config: SidecarConfig = {}): {
             activeSessions.set(sessionId, true);
             if (payload.sessionMetadata) {
               writer.writeMetadata(payload.sessionMetadata);
+            }
+            // Auto-cleanup old sessions
+            if (cleanupConfig) {
+              try { writer.cleanup(cleanupConfig); } catch { /* best effort */ }
             }
           }
 

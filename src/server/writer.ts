@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type {
   AgentReplayEvent,
   WriterConfig,
+  CleanupConfig,
   SessionMetadata,
   ConsoleEntry,
   NetworkEntry,
@@ -197,5 +198,94 @@ export class SessionWriter {
     } catch {
       return null;
     }
+  }
+
+  /** Run cleanup based on config: remove old/excess sessions */
+  cleanup(config: CleanupConfig = {}): { deleted: string[] } {
+    const maxSessions = config.maxSessions ?? 5;
+    const maxAgeHours = config.maxAgeHours ?? 24;
+    const preserveLogs = config.preserveLogs ?? false;
+    const deleted: string[] = [];
+
+    if (preserveLogs) return { deleted };
+
+    const sessionsDir = path.join(this.baseDir, "sessions");
+    if (!fs.existsSync(sessionsDir)) return { deleted };
+
+    // Get all sessions sorted by directory mtime (newest first)
+    const entries = fs.readdirSync(sessionsDir)
+      .map((name) => {
+        const dirPath = path.join(sessionsDir, name);
+        try {
+          const stat = fs.statSync(dirPath);
+          if (!stat.isDirectory()) return null;
+          return { name, mtime: stat.mtimeMs, dirPath };
+        } catch {
+          return null;
+        }
+      })
+      .filter((e): e is { name: string; mtime: number; dirPath: string } => e !== null)
+      .sort((a, b) => b.mtime - a.mtime);
+
+    const now = Date.now();
+    const maxAgeMs = maxAgeHours * 60 * 60 * 1000;
+
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i]!;
+      const isExpired = (now - entry.mtime) > maxAgeMs;
+      const isExcess = i >= maxSessions;
+
+      if (isExpired || isExcess) {
+        try {
+          fs.rmSync(entry.dirPath, { recursive: true, force: true });
+          deleted.push(entry.name);
+        } catch {
+          // Best effort
+        }
+      }
+    }
+
+    // Update latest symlink if current target was deleted
+    const latestLink = path.join(this.baseDir, "latest");
+    try {
+      const target = fs.readlinkSync(latestLink);
+      const targetName = path.basename(target);
+      if (deleted.includes(targetName)) {
+        fs.unlinkSync(latestLink);
+        // Point to newest surviving session
+        const surviving = entries.find((e) => !deleted.includes(e.name));
+        if (surviving) {
+          fs.symlinkSync(path.join("sessions", surviving.name), latestLink, "dir");
+        }
+      }
+    } catch {
+      // No symlink or already gone
+    }
+
+    return { deleted };
+  }
+
+  /** Delete all sessions */
+  cleanAll(): { deleted: string[] } {
+    const sessionsDir = path.join(this.baseDir, "sessions");
+    const deleted: string[] = [];
+
+    if (!fs.existsSync(sessionsDir)) return { deleted };
+
+    for (const name of fs.readdirSync(sessionsDir)) {
+      const dirPath = path.join(sessionsDir, name);
+      try {
+        fs.rmSync(dirPath, { recursive: true, force: true });
+        deleted.push(name);
+      } catch {
+        // Best effort
+      }
+    }
+
+    // Remove latest symlink
+    const latestLink = path.join(this.baseDir, "latest");
+    try { fs.unlinkSync(latestLink); } catch { /* */ }
+
+    return { deleted };
   }
 }

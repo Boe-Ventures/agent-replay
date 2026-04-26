@@ -10,6 +10,8 @@ export type {
   AgentReplayEvent,
   AgentReplayEventType,
   RecorderConfig,
+  FilterConfig,
+  CleanupConfig,
   Transport,
   WriterConfig,
   SidecarConfig,
