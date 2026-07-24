@@ -34,15 +34,23 @@ test("captures console logs", async ({ page }) => {
   // due to the "taks" typo bug. Wait for events to flush to sidecar.
   await page.waitForTimeout(3000);
 
-  const console_entries = readSessionFile("console.jsonl");
+  const console_entries = readSessionFile<{ level?: string; args?: unknown[] }>(
+    "console.jsonl",
+  );
   expect(console_entries.length).toBeGreaterThan(0);
 
-  // Should contain at least one console entry (error from failed fetch)
-  const hasConsole = console_entries.some(
-    (e: Record<string, unknown>) =>
-      e.level === "error" || e.level === "log" || e.level === "warn",
+  // The recorded entry has to carry the console call's own arguments — an
+  // agent reads `args`, not the level. Asserting only on `level` passes even
+  // when every payload is dropped, which is the failure this guards.
+  const withArgs = console_entries.filter(
+    (e) => Array.isArray(e.args) && e.args.length > 0,
   );
-  expect(hasConsole).toBe(true);
+  expect(withArgs.length).toBeGreaterThan(0);
+  expect(
+    withArgs.some((e) =>
+      JSON.stringify(e.args).toLowerCase().includes("failed to fetch tasks"),
+    ),
+  ).toBe(true);
 });
 
 test("captures errors", async ({ page }) => {
@@ -51,24 +59,32 @@ test("captures errors", async ({ page }) => {
   await page.waitForTimeout(3000);
 
   // Errors may be in errors.jsonl or console.jsonl as error-level entries
-  const errors = readSessionFile("errors.jsonl");
-  const consoleEntries = readSessionFile("console.jsonl");
+  const errors = readSessionFile<{ message?: string; stack?: string }>(
+    "errors.jsonl",
+  );
+  const consoleEntries = readSessionFile<{ level?: string; args?: unknown[] }>(
+    "console.jsonl",
+  );
 
-  const errorEntries = [
-    ...errors,
-    ...consoleEntries.filter(
-      (e: Record<string, unknown>) => e.level === "error",
-    ),
+  const errorPayloads = [
+    ...errors.map((e) => JSON.stringify([e.message, e.stack])),
+    ...consoleEntries
+      .filter((e) => e.level === "error")
+      .map((e) => JSON.stringify(e.args)),
   ];
 
-  expect(errorEntries.length).toBeGreaterThan(0);
+  expect(errorPayloads.length).toBeGreaterThan(0);
 
-  // Should contain the "not iterable" error from the taks typo
-  const hasIterableError = errorEntries.some((e: Record<string, unknown>) => {
-    const msg = JSON.stringify(e).toLowerCase();
-    return msg.includes("iterable") || msg.includes("error") || msg.includes("failed");
-  });
-  expect(hasIterableError).toBe(true);
+  // The planted `taks` typo throws "data.tasks is not iterable". Matching the
+  // thrown message is the whole point — an entry that only proves an error
+  // happened, without carrying what broke, is useless to an agent. Match on
+  // "iterable" alone: a looser predicate that also accepts "error" is
+  // satisfied by the serialized `level: "error"` field and can never fail.
+  expect(
+    errorPayloads.some((payload) =>
+      payload.toLowerCase().includes("iterable"),
+    ),
+  ).toBe(true);
 });
 
 test("captures network requests with response bodies", async ({ page }) => {
@@ -135,9 +151,11 @@ test("CLI summary works", async ({ page }) => {
     timeout: 10_000,
   });
 
-  // Summary should contain key sections
-  expect(output.toLowerCase()).toContain("error");
-  expect(output.toLowerCase()).toContain("network");
+  // The summary is what an agent actually reads, so it has to carry the
+  // recorded evidence, not just the section headings — it must name the failing
+  // request and quote the console error that the session captured.
+  expect(output).toContain("/api/tasks");
+  expect(output.toLowerCase()).toContain("failed to fetch tasks");
 });
 
 test("separate JSONL files are created", async ({ page }) => {
