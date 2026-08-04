@@ -1,87 +1,45 @@
-import * as crypto from "node:crypto";
-import type { AgentReplayEvent, SessionMetadata } from "../core/types.js";
+import { parseTransportPayload } from "../core/schema.js";
+import { sanitizeEvent } from "../core/privacy.js";
 import { SessionWriter } from "../server/writer.js";
+import { generateSummary } from "../server/summarizer.js";
 
 const writer = new SessionWriter();
-const activeSessions = new Set<string>();
 
 interface NextRequest {
-  method: string;
+  url?: string;
   json: () => Promise<unknown>;
 }
 
-/**
- * Next.js App Router API route handler for receiving agent-replay events.
- *
- * Usage in `app/api/__agent-replay/events/route.ts`:
- * ```ts
- * export { POST } from "@boe-ventures/agent-replay/next";
- * ```
- */
 export async function POST(request: NextRequest): Promise<Response> {
   try {
-    const payload = (await request.json()) as {
-      events: AgentReplayEvent[];
-      sessionMetadata?: SessionMetadata;
+    const payload = parseTransportPayload(await request.json());
+    const sessionId = payload.events[0]?.sessionId ?? payload.sessionMetadata?.id;
+    if (!sessionId) return Response.json({ error: "At least one event is required" }, { status: 400 });
+    const metadata = payload.sessionMetadata ?? {
+      id: sessionId,
+      startedAt: new Date(payload.events[0]?.timestamp ?? Date.now()).toISOString(),
+      status: "active" as const,
+      mode: "rolling" as const,
+      privacyPreset: "safe" as const,
+      url: "",
+      userAgent: "",
+      viewport: { width: 0, height: 0 },
     };
-
-    if (payload.events.length > 0) {
-      let sessionId = payload.events[0]!.sessionId;
-      if (!sessionId) {
-        sessionId = crypto.randomUUID();
-        for (const event of payload.events) {
-          event.sessionId = sessionId;
-        }
-      }
-
-      if (!activeSessions.has(sessionId)) {
-        writer.initSession(sessionId);
-        activeSessions.add(sessionId);
-        if (payload.sessionMetadata) {
-          writer.writeMetadata(payload.sessionMetadata);
-        }
-      }
-
-      writer.writeEvents(payload.events);
-    }
-
-    return new Response(
-      JSON.stringify({ ok: true, received: payload.events.length }),
-      {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }
-    );
-  } catch (err) {
-    return new Response(
-      JSON.stringify({
-        error: err instanceof Error ? err.message : "Internal error",
-      }),
-      {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      }
-    );
+    writer.initSession(sessionId, metadata, payload.pageMetadata);
+    writer.writeEvents(payload.events.map((event) =>
+      sanitizeEvent(event, { privacyPreset: metadata.privacyPreset ?? "safe" }, metadata.url),
+    ));
+    generateSummary(writer, sessionId);
+    return Response.json({ ok: true, received: payload.events.length, sessionId });
+  } catch (error) {
+    return Response.json({ error: error instanceof Error ? error.message : "Invalid request" }, { status: 400 });
   }
 }
 
-/**
- * Health check endpoint for the Next.js API route.
- *
- * Usage in `app/api/__agent-replay/health/route.ts`:
- * ```ts
- * export { GET } from "@boe-ventures/agent-replay/next";
- * ```
- */
 export async function GET(): Promise<Response> {
-  return new Response(
-    JSON.stringify({
-      status: "ok",
-      activeSessions: activeSessions.size,
-    }),
-    {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    }
-  );
+  return Response.json({
+    status: "ok",
+    schemaVersion: 1,
+    latestSession: writer.getLatestSessionId(),
+  });
 }

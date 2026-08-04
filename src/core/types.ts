@@ -1,24 +1,69 @@
 import type { eventWithTime } from "@rrweb/types";
 
-// ── Session ──────────────────────────────────────────────
+export const REPLAY_SCHEMA_VERSION = 1 as const;
+
+export type RecordingMode = "rolling" | "session" | "demo";
+export type PrivacyPreset = "safe" | "diagnostic" | "demo";
+export type SessionStatus = "active" | "closed" | "interrupted";
+
+export interface RetentionPolicy {
+  rollingWindowMs?: number;
+  checkpointIntervalMs?: number;
+  preTriggerMs?: number;
+  postTriggerMs?: number;
+  maxPinnedSessions?: number;
+  pinnedMaxAgeMs?: number;
+  preserve?: boolean;
+}
+
+export interface TriggerPolicy {
+  uncaughtErrors?: boolean;
+  rejectedPromises?: boolean;
+  serverErrors?: boolean;
+  networkFailures?: boolean;
+  manualMarkers?: boolean;
+  clientErrors?: boolean;
+}
+
+export interface RedactionConfig {
+  fieldNames?: string[];
+  headerNames?: string[];
+  queryParameters?: string[];
+  jsonKeys?: string[];
+  replacement?: string;
+}
 
 export interface SessionMetadata {
   id: string;
-  startedAt: string; // ISO 8601
+  schemaVersion?: number;
+  startedAt: string;
   endedAt?: string;
+  status?: SessionStatus;
+  mode?: RecordingMode;
+  privacyPreset?: PrivacyPreset;
   url: string;
   userAgent: string;
   viewport: { width: number; height: number };
   durationMs?: number;
+  title?: string;
+  metadata?: Record<string, unknown>;
+  pinned?: boolean;
+  pinReason?: string;
 }
 
-// ── Events ───────────────────────────────────────────────
+export interface PageMetadata {
+  id: string;
+  url: string;
+  title?: string;
+  startedAt: string;
+  endedAt?: string;
+}
 
 export type RRWebEvent = eventWithTime;
 
 export interface ConsoleEntry {
-  timestamp: number; // ms since epoch
-  offsetMs: number; // ms since session start
+  timestamp: number;
+  offsetMs: number;
   level: "log" | "warn" | "error" | "info" | "debug";
   args: unknown[];
   trace?: string;
@@ -27,18 +72,21 @@ export interface ConsoleEntry {
 export interface NetworkEntry {
   timestamp: number;
   offsetMs: number;
+  requestId?: string;
   method: string;
   url: string;
-  status: number | null; // null if aborted/failed
+  status: number | null;
   statusText?: string;
   durationMs: number;
   requestHeaders?: Record<string, string>;
   responseHeaders?: Record<string, string>;
-  requestBody?: string; // serialized, truncated if large
-  responseBody?: string; // serialized, truncated if large
-  responseSize?: number; // bytes (content-length or measured)
-  transferSize?: number; // from PerformanceObserver
-  initiatorType?: string; // fetch, xmlhttprequest, script, etc.
+  requestBody?: string;
+  responseBody?: string;
+  responseSize?: number;
+  transferSize?: number;
+  initiatorType?: string;
+  initiatorEventId?: string;
+  contentType?: string;
   error?: string;
   isError: boolean;
   initiator: "fetch" | "xhr" | "websocket";
@@ -47,51 +95,35 @@ export interface NetworkEntry {
 export interface WebSocketEntry {
   timestamp: number;
   offsetMs: number;
+  requestId?: string;
   url: string;
   direction: "send" | "receive" | "open" | "close" | "error";
-  data?: string; // message payload, truncated if large
-  code?: number; // close code
-  reason?: string; // close reason
-}
-
-// ── Network Configuration ────────────────────────────────
-
-export interface NetworkConfig {
-  /** Capture request bodies. Default: true */
-  captureRequestBody?: boolean;
-  /** Capture response bodies. Default: true */
-  captureResponseBody?: boolean;
-  /** Capture request/response headers. Default: true */
-  captureHeaders?: boolean;
-  /** Capture WebSocket messages. Default: true */
-  captureWebSocket?: boolean;
-  /** Max body size in bytes before truncation. Default: 64KB */
-  maxBodySize?: number;
-  /** Max WebSocket message size in bytes. Default: 16KB */
-  maxWebSocketMessageSize?: number;
-  /** Timeout in ms for reading streaming response bodies. Default: 500 */
-  bodyTimeout?: number;
-  /** URL patterns to exclude from capture */
-  ignoreUrls?: (string | RegExp)[];
+  data?: string;
+  code?: number;
+  reason?: string;
 }
 
 export interface ErrorEntry {
   timestamp: number;
   offsetMs: number;
+  fingerprint?: string;
   message: string;
   stack?: string;
   source?: string;
   line?: number;
   column?: number;
-  type: "error" | "unhandledrejection";
+  type: "error" | "unhandledrejection" | "console-error" | "network";
 }
 
 export interface InteractionEntry {
   timestamp: number;
   offsetMs: number;
-  type: "click" | "input" | "scroll" | "navigation";
-  target?: string; // CSS selector or description
+  type: "click" | "input" | "change" | "submit" | "scroll" | "navigation";
+  target?: string;
+  text?: string;
   value?: string;
+  x?: number;
+  y?: number;
 }
 
 export interface RouteChangeEntry {
@@ -99,9 +131,35 @@ export interface RouteChangeEntry {
   offsetMs: number;
   from: string;
   to: string;
+  navigationType?: "push" | "replace" | "pop" | "load";
 }
 
-// ── Aggregate event wrapper ──────────────────────────────
+export interface MarkerEntry {
+  timestamp: number;
+  offsetMs: number;
+  label: string;
+  metadata?: Record<string, unknown>;
+  triggerIncident?: boolean;
+}
+
+export interface PerformanceEntry {
+  timestamp: number;
+  offsetMs: number;
+  name: string;
+  entryType: string;
+  duration: number;
+  startTime: number;
+  detail?: Record<string, unknown>;
+}
+
+export interface PlaywrightStepEntry {
+  timestamp: number;
+  offsetMs: number;
+  title: string;
+  category?: string;
+  status?: "running" | "passed" | "failed";
+  metadata?: Record<string, unknown>;
+}
 
 export type AgentReplayEventType =
   | "rrweb"
@@ -110,60 +168,76 @@ export type AgentReplayEventType =
   | "websocket"
   | "error"
   | "interaction"
-  | "route-change";
+  | "route-change"
+  | "marker"
+  | "performance"
+  | "playwright-step";
+
+export type AgentReplayEventData =
+  | RRWebEvent
+  | ConsoleEntry
+  | NetworkEntry
+  | WebSocketEntry
+  | ErrorEntry
+  | InteractionEntry
+  | RouteChangeEntry
+  | MarkerEntry
+  | PerformanceEntry
+  | PlaywrightStepEntry;
 
 export interface AgentReplayEvent {
+  id: string;
   type: AgentReplayEventType;
+  sequence: number;
   timestamp: number;
+  offsetMs: number;
   sessionId: string;
-  data:
-    | RRWebEvent
-    | ConsoleEntry
-    | NetworkEntry
-    | WebSocketEntry
-    | ErrorEntry
-    | InteractionEntry
-    | RouteChangeEntry;
+  pageId: string;
+  data: AgentReplayEventData;
 }
 
-// ── Filter Config ────────────────────────────────────────
+export interface NetworkConfig {
+  captureRequestBody?: boolean;
+  captureResponseBody?: boolean;
+  captureHeaders?: boolean;
+  captureWebSocket?: boolean;
+  maxBodySize?: number;
+  maxWebSocketMessageSize?: number;
+  bodyTimeout?: number;
+  ignoreUrls?: (string | RegExp)[];
+}
 
 export interface FilterConfig {
-  /** Filter console entries before sending. Return false to skip, or mutate the entry. */
   filterConsole?: (entry: ConsoleEntry) => boolean;
-  /** Filter network entries before sending. Return false to skip, or mutate the entry (e.g. truncate bodies). */
   filterNetwork?: (entry: NetworkEntry) => boolean;
-  /** Filter error entries before sending. Return false to skip. */
   filterError?: (entry: ErrorEntry) => boolean;
-  /** Max body size in bytes for network request/response bodies. Default 4096. Bodies exceeding this are truncated with ...[truncated] */
   maxBodySize?: number;
 }
 
-// ── Cleanup Config ───────────────────────────────────────
-
 export interface CleanupConfig {
-  /** Max number of sessions to keep. Default 5. */
   maxSessions?: number;
-  /** Max age in hours for sessions. Default 24. */
   maxAgeHours?: number;
-  /** If true, never auto-delete sessions. Default false. */
   preserveLogs?: boolean;
+  maxPinnedSessions?: number;
+  pinnedMaxAgeMs?: number;
 }
 
-// ── Config ───────────────────────────────────────────────
-
 export interface RecorderConfig {
-  /** Enable/disable recording entirely. Default: true in dev */
   enabled?: boolean;
-  /** Capture console logs. Default: true */
+  recordingMode?: RecordingMode;
+  privacyPreset?: PrivacyPreset;
+  retention?: RetentionPolicy;
+  triggers?: TriggerPolicy;
+  metadata?: Record<string, unknown>;
+  redaction?: RedactionConfig;
   captureConsole?: boolean;
-  /** Capture network requests. Default: true */
   captureNetwork?: boolean;
-  /** Capture DOM via rrweb. Default: true */
   captureDom?: boolean;
-  /** CSS selectors to ignore from rrweb recording */
+  captureInteractions?: boolean;
+  captureRoutes?: boolean;
+  capturePerformance?: boolean;
+  maskAllInputs?: boolean;
   ignoreSelectors?: string[];
-  /** rrweb sampling config */
   sampling?: {
     mousemove?: boolean | number;
     mouseInteraction?: boolean;
@@ -171,52 +245,66 @@ export interface RecorderConfig {
     media?: number;
     input?: "last" | "all";
   };
-  /** Max events to buffer before flushing. Default: 50 */
   batchSize?: number;
-  /** Flush interval in ms. Default: 2000 */
   flushIntervalMs?: number;
-  /** Session ID override. Auto-generated if not provided */
   sessionId?: string;
-  /** Sidecar URL. Default: http://localhost:3700 */
   sidecarUrl?: string;
-  /** Network URL patterns to ignore */
+  token?: string;
   ignoreNetworkPatterns?: (string | RegExp)[];
-  /** Fine-grained network capture config */
   networkConfig?: NetworkConfig;
-  /** Filter callbacks for events before they are batched/sent */
   filters?: FilterConfig;
 }
 
-// ── Transport ────────────────────────────────────────────
+export interface TransportPayload {
+  events: AgentReplayEvent[];
+  sessionMetadata?: SessionMetadata;
+  pageMetadata?: PageMetadata;
+}
 
 export interface Transport {
-  send(events: AgentReplayEvent[]): Promise<void>;
+  send(events: AgentReplayEvent[], context?: Omit<TransportPayload, "events">): Promise<void>;
   flush(): Promise<void>;
   close(): Promise<void>;
 }
 
-// ── Writer ───────────────────────────────────────────────
-
 export interface WriterConfig {
-  /** Base directory. Default: .agent-replay */
   baseDir?: string;
-  /** Max file size in bytes before rotation. Default: 50MB */
   maxFileSizeBytes?: number;
-  /** Max session age in ms. Default: 1 hour */
+  maxSessionSizeBytes?: number;
+  maxDiskBytes?: number;
   maxSessionAgeMs?: number;
 }
-
-// ── Server ───────────────────────────────────────────────
 
 export interface SidecarConfig {
   port?: number;
   host?: string;
+  token?: string;
   writerConfig?: WriterConfig;
   corsOrigins?: string[];
   cleanupConfig?: CleanupConfig;
+  maxBatchBytes?: number;
+  maxEventsPerBatch?: number;
+  maxMediaChunkBytes?: number;
 }
 
-// ── Summary ──────────────────────────────────────────────
+export interface ReplayManifest {
+  schemaVersion: 1;
+  product: "agent-replay";
+  session: SessionMetadata;
+  pages: PageMetadata[];
+  counts: Partial<Record<AgentReplayEventType, number>>;
+  files: Record<string, { bytes: number; sha256?: string }>;
+  fidelityWarnings: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CorrelatedIncident {
+  id: string;
+  trigger: AgentReplayEvent;
+  events: AgentReplayEvent[];
+  summary: string;
+}
 
 export interface SessionSummary {
   session: SessionMetadata;
@@ -225,4 +313,37 @@ export interface SessionSummary {
   console: ConsoleEntry[];
   interactions: InteractionEntry[];
   routeChanges: RouteChangeEntry[];
+  markers: MarkerEntry[];
+  incidents: CorrelatedIncident[];
+}
+
+export interface ComparisonResult {
+  beforeSessionId: string;
+  afterSessionId: string;
+  alignment: "markers" | "playwright-steps" | "routes-actions" | "timestamps";
+  resolvedErrors: string[];
+  newErrors: string[];
+  changedNetwork: Array<{
+    key: string;
+    beforeStatus: number | null;
+    afterStatus: number | null;
+  }>;
+  completedRoutes: string[];
+  missingRoutes: string[];
+  timingChanges: Array<{ key: string; beforeMs: number; afterMs: number; deltaMs: number }>;
+  finalStateChanged: boolean;
+}
+
+export interface ExportOptions {
+  format: "webm" | "mp4" | "gif" | "poster" | "storyboard";
+  preset?: "debug" | "launch" | "square" | "vertical";
+  fromMs?: number;
+  toMs?: number;
+  title?: string;
+  outro?: string;
+  captions?: boolean;
+  emphasizeClicks?: boolean;
+  removeIdle?: boolean;
+  audio?: boolean;
+  output?: string;
 }

@@ -1,133 +1,169 @@
 export default defineBackground(() => {
-  const SIDECAR_URL = "http://localhost:3700";
+  const SIDECAR_URL = "http://127.0.0.1:3700";
+  const SESSION_TIMEOUT = 30 * 60 * 1000;
 
-  // ── State ──────────────────────────────────────────
   interface TabRecording {
     sessionId: string;
     url: string;
     eventCount: number;
     sidecarConnected: boolean;
     startedAt: number;
+    lastSeenAt: number;
+    mode: "rolling" | "demo";
+    demoCaptureId?: string;
   }
 
-  const activeRecordings = new Map<number, TabRecording>();
+  let activeRecordings = new Map<number, TabRecording>();
   let sidecarAvailable = false;
 
-  // ── Sidecar health check ───────────────────────────
+  async function persist(): Promise<void> {
+    await chrome.storage.session.set({ activeRecordings: Object.fromEntries(activeRecordings) });
+  }
+
+  async function restore(): Promise<void> {
+    const stored = await chrome.storage.session.get("activeRecordings");
+    const entries = Object.entries((stored.activeRecordings ?? {}) as Record<string, TabRecording>);
+    activeRecordings = new Map(entries.map(([key, value]) => [Number(key), value]));
+    for (const [tabId, recording] of activeRecordings) updateBadge(tabId, recording);
+  }
+
   async function checkSidecar(): Promise<boolean> {
     try {
-      const res = await fetch(`${SIDECAR_URL}/sessions`, {
-        method: "GET",
-        signal: AbortSignal.timeout(2000),
-      });
-      sidecarAvailable = res.ok;
+      const response = await fetch(SIDECAR_URL + "/api/v1/health", { signal: AbortSignal.timeout(2_000) });
+      sidecarAvailable = response.ok;
     } catch {
       sidecarAvailable = false;
     }
     return sidecarAvailable;
   }
 
-  // Check sidecar on startup and every 30 seconds
+  function updateBadge(tabId: number, recording?: TabRecording): void {
+    const demo = Boolean(recording?.demoCaptureId);
+    void chrome.action.setBadgeText({ text: recording ? demo ? "DEMO" : "REC" : "", tabId });
+    if (recording) void chrome.action.setBadgeBackgroundColor({ color: demo ? "#7c3aed" : "#ef4444", tabId });
+  }
+
+  async function ensureOffscreen(): Promise<void> {
+    const url = chrome.runtime.getURL("offscreen.html");
+    const contexts = await chrome.runtime.getContexts({ contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT], documentUrls: [url] });
+    if (contexts.length === 0) {
+      await chrome.offscreen.createDocument({
+        url: "offscreen.html",
+        reasons: [chrome.offscreen.Reason.USER_MEDIA],
+        justification: "Record the active development tab to a local WebM demo.",
+      });
+    }
+  }
+
+  async function getOrCreate(tabId: number, url: string): Promise<TabRecording> {
+    const existing = activeRecordings.get(tabId);
+    const now = Date.now();
+    if (existing && now - existing.lastSeenAt <= SESSION_TIMEOUT) {
+      existing.url = url;
+      existing.lastSeenAt = now;
+      await persist();
+      return existing;
+    }
+    const recording: TabRecording = {
+      sessionId: crypto.randomUUID(), url, eventCount: 0, sidecarConnected: sidecarAvailable,
+      startedAt: now, lastSeenAt: now, mode: "rolling",
+    };
+    activeRecordings.set(tabId, recording);
+    updateBadge(tabId, recording);
+    await persist();
+    return recording;
+  }
+
+  async function startDemo(tabId: number, audio = false): Promise<TabRecording> {
+    const tab = await chrome.tabs.get(tabId);
+    const recording = await getOrCreate(tabId, tab.url ?? "");
+    if (recording.demoCaptureId) return recording;
+    await ensureOffscreen();
+    const streamId = await new Promise<string>((resolve, reject) => {
+      chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (id) => {
+        const error = chrome.runtime.lastError;
+        if (error || !id) reject(new Error(error?.message ?? "Unable to capture this tab"));
+        else resolve(id);
+      });
+    });
+    recording.demoCaptureId = crypto.randomUUID();
+    recording.mode = "demo";
+    await chrome.runtime.sendMessage({
+      target: "offscreen", type: "START_DEMO", streamId,
+      sessionId: recording.sessionId, captureId: recording.demoCaptureId,
+      sidecarUrl: SIDECAR_URL, audio,
+    });
+    updateBadge(tabId, recording);
+    await persist();
+    return recording;
+  }
+
+  async function stopDemo(tabId: number): Promise<void> {
+    const recording = activeRecordings.get(tabId);
+    if (!recording?.demoCaptureId) return;
+    await chrome.runtime.sendMessage({ target: "offscreen", type: "STOP_DEMO", captureId: recording.demoCaptureId });
+    recording.demoCaptureId = undefined;
+    recording.mode = "rolling";
+    updateBadge(tabId, recording);
+    await persist();
+  }
+
+  void restore();
   void checkSidecar();
   setInterval(() => void checkSidecar(), 30_000);
 
-  // ── Message handling from content scripts ──────────
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    const tabId = sender.tab?.id;
-
-    switch (message.type) {
-      case "RECORDING_STARTED":
-        if (tabId != null) {
-          activeRecordings.set(tabId, {
-            sessionId: message.sessionId,
-            url: message.url,
-            eventCount: 0,
-            sidecarConnected: sidecarAvailable,
-            startedAt: Date.now(),
-          });
-          updateBadge(tabId, true);
+    if (message.target === "offscreen") return;
+    const tabId = message.tabId ?? sender.tab?.id;
+    void (async () => {
+      if (message.type === "GET_OR_CREATE_SESSION" && tabId != null) {
+        const recording = await getOrCreate(tabId, message.url ?? sender.tab?.url ?? "");
+        sendResponse({ recording, pageId: crypto.randomUUID(), sidecarAvailable });
+      } else if (message.type === "STATUS_UPDATE" && tabId != null) {
+        const recording = activeRecordings.get(tabId);
+        if (recording) {
+          recording.eventCount = message.eventCount;
+          recording.sidecarConnected = message.sidecarConnected;
+          recording.url = message.url;
+          recording.lastSeenAt = Date.now();
+          await persist();
         }
-        break;
-
-      case "RECORDING_STOPPED":
-        if (tabId != null) {
-          activeRecordings.delete(tabId);
-          updateBadge(tabId, false);
+        sendResponse({ ok: true });
+      } else if (message.type === "GET_STATUS") {
+        const resolvedTabId = tabId ?? (await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.id;
+        sendResponse({ recording: resolvedTabId == null ? null : activeRecordings.get(resolvedTabId) ?? null, sidecarAvailable });
+      } else if (message.type === "START_DEMO" && tabId != null) {
+        sendResponse({ recording: await startDemo(tabId, Boolean(message.audio)) });
+      } else if (message.type === "STOP_DEMO" && tabId != null) {
+        await stopDemo(tabId);
+        sendResponse({ ok: true });
+      } else if (message.type === "GET_DEMO_STATUS") {
+        const status = await chrome.runtime.sendMessage({ target: "offscreen", type: "GET_DEMO_STATUS" });
+        sendResponse(status);
+      } else if (message.type === "OPEN_VIEWER") {
+        await chrome.tabs.create({ url: SIDECAR_URL });
+        sendResponse({ ok: true });
+      } else if (message.type === "DEMO_FINISHED") {
+        const match = [...activeRecordings.entries()].find(([, recording]) => recording.demoCaptureId === message.captureId);
+        if (match) {
+          const [resolvedTabId, recording] = match;
+          recording.demoCaptureId = undefined;
+          recording.mode = "rolling";
+          updateBadge(resolvedTabId, recording);
+          await persist();
         }
-        break;
-
-      case "STATUS_UPDATE":
-        if (tabId != null) {
-          const recording = activeRecordings.get(tabId);
-          if (recording) {
-            recording.eventCount = message.eventCount;
-            recording.sidecarConnected = message.sidecarConnected;
-            recording.url = message.url;
-          }
-        }
-        break;
-
-      case "GET_STATUS":
-        // Popup requests current state
-        if (tabId != null) {
-          const rec = activeRecordings.get(tabId);
-          sendResponse({
-            recording: rec ?? null,
-            sidecarAvailable,
-          });
-        } else {
-          // Popup doesn't have a tab, query active tab
-          chrome.tabs.query(
-            { active: true, currentWindow: true },
-            (tabs) => {
-              const activeTabId = tabs[0]?.id;
-              const rec =
-                activeTabId != null
-                  ? activeRecordings.get(activeTabId)
-                  : null;
-              sendResponse({
-                recording: rec ?? null,
-                sidecarAvailable,
-              });
-            }
-          );
-          return true; // Async response
-        }
-        break;
-
-      case "GET_ALL_RECORDINGS":
-        sendResponse({
-          recordings: Object.fromEntries(activeRecordings),
-          sidecarAvailable,
-        });
-        break;
-    }
+        sendResponse({ ok: true });
+      } else {
+        sendResponse({ ok: false });
+      }
+    })().catch((error) => sendResponse({ error: error instanceof Error ? error.message : String(error) }));
+    return true;
   });
 
-  // ── Tab lifecycle ──────────────────────────────────
   chrome.tabs.onRemoved.addListener((tabId) => {
-    activeRecordings.delete(tabId);
-  });
-
-  // Track URL changes for session rotation
-  chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-    if (changeInfo.status === "loading" && activeRecordings.has(tabId)) {
-      // Tab is navigating — content script will re-inject and start a new session
+    void stopDemo(tabId).finally(() => {
       activeRecordings.delete(tabId);
-      updateBadge(tabId, false);
-    }
+      void persist();
+    });
   });
-
-  // ── Badge ──────────────────────────────────────────
-  function updateBadge(tabId: number, recording: boolean) {
-    if (recording) {
-      chrome.action.setBadgeText({ text: "REC", tabId });
-      chrome.action.setBadgeBackgroundColor({
-        color: "#ef4444",
-        tabId,
-      });
-    } else {
-      chrome.action.setBadgeText({ text: "", tabId });
-    }
-  }
 });

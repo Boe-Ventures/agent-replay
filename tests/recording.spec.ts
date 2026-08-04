@@ -1,175 +1,189 @@
-import { test, expect } from "@playwright/test";
-import { execSync } from "node:child_process";
+import { expect, test } from "@playwright/test";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import {
-  startSidecar,
-  startPlayground,
-  readSessionFile,
-  sessionFileExists,
-  getLatestTarget,
-  cleanAgentReplay,
+  AGENT_REPLAY_DIR,
+  BUGBOARD_URL,
+  CRASH_CAFE_URL,
+  ROOT,
+  SIDECAR_URL,
   buildPackage,
+  cleanAgentReplay,
+  dataOf,
+  listSessions,
+  readSignal,
+  runCli,
+  sessionContains,
+  sessionDir,
+  startBugBoard,
+  startCrashCafe,
+  startSidecar,
+  waitForNewSession,
+  waitForNewSessionWithSignal,
+  waitForSignal,
 } from "./helpers.js";
 
-const ROOT = path.resolve(import.meta.dirname, "..");
-
 let stopSidecar: () => void;
-let stopPlayground: () => void;
+let stopBugBoard: () => void;
+let stopCrashCafe: () => void;
+
+test.describe.configure({ mode: "serial" });
 
 test.beforeAll(async () => {
   buildPackage();
   cleanAgentReplay();
   stopSidecar = await startSidecar();
-  stopPlayground = await startPlayground();
+  stopBugBoard = await startBugBoard();
+  stopCrashCafe = await startCrashCafe();
 });
 
-test.afterAll(async () => {
-  stopPlayground?.();
+test.afterAll(() => {
+  stopCrashCafe?.();
+  stopBugBoard?.();
   stopSidecar?.();
 });
 
-test("captures console logs", async ({ page }) => {
-  await page.goto("/");
-  // The page auto-fetches /api/tasks on mount which triggers console.error
-  // due to the "taks" typo bug. Wait for events to flush to sidecar.
-  await page.waitForTimeout(3000);
+test("captures a coherent BugBoard failure and keeps secrets off disk", async ({ browser }) => {
+  const known = new Set((await listSessions()).map((session) => session.id));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(BUGBOARD_URL);
+  await page.getByRole("button", { name: "Run broken triage" }).click();
+  await expect(page.getByText("Captured failure")).toBeVisible();
 
-  const console_entries = readSessionFile<{ level?: string; args?: unknown[] }>(
-    "console.jsonl",
+  const { sessionId, events: network } = await waitForNewSessionWithSignal(
+    known,
+    "network.jsonl",
+    (events) => events.some((event) => dataOf(event).status === 500),
   );
-  expect(console_entries.length).toBeGreaterThan(0);
+  const errors = await waitForSignal(sessionId, "errors.jsonl", (events) => events.length > 0);
+  const markers = await waitForSignal(sessionId, "markers.jsonl", (events) => events.some((event) => dataOf(event).label === "triage-sync"));
 
-  // The recorded entry has to carry the console call's own arguments — an
-  // agent reads `args`, not the level. Asserting only on `level` passes even
-  // when every payload is dropped, which is the failure this guards.
-  const withArgs = console_entries.filter(
-    (e) => Array.isArray(e.args) && e.args.length > 0,
-  );
-  expect(withArgs.length).toBeGreaterThan(0);
-  expect(
-    withArgs.some((e) =>
-      JSON.stringify(e.args).toLowerCase().includes("failed to fetch tasks"),
-    ),
-  ).toBe(true);
+  const failedRequest = network.map(dataOf).find((event) => event.status === 500);
+  expect(failedRequest?.method).toBe("POST");
+  expect(String(failedRequest?.url)).toContain("/api/triage");
+  expect(errors.map(dataOf).some((event) => event.source === "network" && String(event.message).includes("returned 500"))).toBe(true);
+  await expect(page.getByText("Cannot read properties of undefined (reading 'assignee')")).toBeVisible();
+  expect(markers.map(dataOf).some((event) => event.label === "triage-sync")).toBe(true);
+  expect(sessionContains(sessionId, "fixture-secret-never-on-disk")).toBe(false);
+  expect(JSON.parse(fs.readFileSync(path.join(sessionDir(sessionId), "manifest.json"), "utf8")).session.pinned).toBe(true);
+  expect(fs.existsSync(path.join(sessionDir(sessionId), "events.jsonl"))).toBe(true);
+  await context.close();
 });
 
-test("captures errors", async ({ page }) => {
-  await page.goto("/");
-  // The page auto-triggers an error: "data.tasks is not iterable"
-  await page.waitForTimeout(3000);
-
-  // Errors may be in errors.jsonl or console.jsonl as error-level entries
-  const errors = readSessionFile<{ message?: string; stack?: string }>(
-    "errors.jsonl",
+test("compares the broken and fixed BugBoard flows as a fix receipt", async ({ browser }) => {
+  const sessionsBeforeBroken = new Set((await listSessions()).map((session) => session.id));
+  const brokenContext = await browser.newContext();
+  const brokenPage = await brokenContext.newPage();
+  await brokenPage.goto(BUGBOARD_URL);
+  await brokenPage.getByRole("button", { name: "Run broken triage" }).click();
+  await expect(brokenPage.getByText("Captured failure")).toBeVisible();
+  const { sessionId: beforeId } = await waitForNewSessionWithSignal(
+    sessionsBeforeBroken,
+    "network.jsonl",
+    (events) => events.some((event) => dataOf(event).status === 500),
   );
-  const consoleEntries = readSessionFile<{ level?: string; args?: unknown[] }>(
-    "console.jsonl",
+  await brokenContext.close();
+
+  const sessionsBeforeFixed = new Set((await listSessions()).map((session) => session.id));
+  const fixedContext = await browser.newContext();
+  const fixedPage = await fixedContext.newPage();
+  await fixedPage.goto(BUGBOARD_URL);
+  await fixedPage.getByRole("button", { name: "Run clean triage" }).click();
+  await expect(fixedPage.getByText("Triage completed")).toBeVisible();
+  const { sessionId: afterId } = await waitForNewSessionWithSignal(
+    sessionsBeforeFixed,
+    "network.jsonl",
+    (events) => events.some((event) => dataOf(event).status === 200),
   );
+  await fixedContext.close();
 
-  const errorPayloads = [
-    ...errors.map((e) => JSON.stringify([e.message, e.stack])),
-    ...consoleEntries
-      .filter((e) => e.level === "error")
-      .map((e) => JSON.stringify(e.args)),
-  ];
+  const outputDirectory = path.join(ROOT, ".agent-replay-e2e-artifacts", "receipt");
+  const result = JSON.parse(runCli(["receipt", beforeId, afterId, "--output", outputDirectory])) as {
+    result: { alignment: string; resolvedErrors: string[]; newErrors: string[]; changedNetwork: Array<{ beforeStatus: number; afterStatus: number }> };
+  };
+  expect(result.result.alignment).toBe("markers");
+  expect(result.result.resolvedErrors.length).toBeGreaterThan(0);
+  expect(result.result.newErrors).toHaveLength(0);
+  expect(result.result.changedNetwork).toContainEqual(expect.objectContaining({ beforeStatus: 500, afterStatus: 200 }));
+  expect(fs.existsSync(path.join(outputDirectory, "fix-receipt.json"))).toBe(true);
+  expect(fs.existsSync(path.join(outputDirectory, "fix-receipt.md"))).toBe(true);
+  expect(fs.existsSync(path.join(outputDirectory, "fix-receipt.html"))).toBe(true);
 
-  expect(errorPayloads.length).toBeGreaterThan(0);
-
-  // The planted `taks` typo throws "data.tasks is not iterable". Matching the
-  // thrown message is the whole point — an entry that only proves an error
-  // happened, without carrying what broke, is useless to an agent. Match on
-  // "iterable" alone: a looser predicate that also accepts "error" is
-  // satisfied by the serialized `level: "error"` field and can never fail.
-  expect(
-    errorPayloads.some((payload) =>
-      payload.toLowerCase().includes("iterable"),
-    ),
-  ).toBe(true);
+  const capsule = JSON.parse(runCli(["pack", beforeId, "--output", path.join(ROOT, ".agent-replay-e2e-artifacts", "broken.areplay")])) as { output: string };
+  expect(fs.statSync(capsule.output).size).toBeGreaterThan(1_000);
+  expect(fs.readFileSync(capsule.output).subarray(0, 2).toString()).toBe("PK");
+  expect(fs.existsSync(path.join(sessionDir(beforeId), "report.html"))).toBe(true);
 });
 
-test("captures network requests with response bodies", async ({ page }) => {
-  await page.goto("/");
-  // Page auto-fetches GET /api/tasks on mount
-  await page.waitForTimeout(3000);
+test("keeps a session stable through reload while separating concurrent tabs", async ({ browser }) => {
+  const known = new Set((await listSessions()).map((session) => session.id));
+  const context = await browser.newContext();
+  const first = await context.newPage();
+  await first.goto(BUGBOARD_URL);
+  const firstId = await waitForNewSession(known);
+  await first.reload();
+  await first.getByRole("button", { name: "Run clean triage" }).click();
+  await waitForSignal(firstId, "markers.jsonl", (events) => events.some((event) => dataOf(event).label === "triage-complete"));
 
-  const network = readSessionFile<{
-    url?: string;
-    method?: string;
-    status?: number;
-    responseBody?: string;
-  }>("network.jsonl");
-
-  expect(network.length).toBeGreaterThan(0);
-
-  // Find the GET /api/tasks request
-  const tasksReq = network.find(
-    (n) =>
-      n.url?.includes("/api/tasks") &&
-      (n.method === "GET" || !n.method), // method may not be set for GET
-  );
-  expect(tasksReq).toBeDefined();
-  expect(tasksReq!.status).toBe(200);
-
-  // Response body should contain the "taks" typo (the planted bug)
-  const bodyStr =
-    typeof tasksReq!.responseBody === "string"
-      ? tasksReq!.responseBody
-      : JSON.stringify(tasksReq!.responseBody);
-  expect(bodyStr).toContain("taks");
+  const afterFirst = new Set((await listSessions()).map((session) => session.id));
+  const second = await context.newPage();
+  await second.goto(BUGBOARD_URL);
+  const secondId = await waitForNewSession(afterFirst);
+  expect(secondId).not.toBe(firstId);
+  const manifest = JSON.parse(fs.readFileSync(path.join(sessionDir(firstId), "manifest.json"), "utf8")) as { pages: Array<{ id: string }> };
+  expect(new Set(manifest.pages.map((page) => page.id)).size).toBeGreaterThanOrEqual(2);
+  await context.close();
 });
 
-test("captures failed network requests", async ({ page }) => {
-  await page.goto("/");
-  await page.waitForTimeout(2000);
+test("captures CrashCafe rejection and does not pin an ordinary 404", async ({ browser }) => {
+  const known = new Set((await listSessions()).map((session) => session.id));
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(CRASH_CAFE_URL);
+  await page.getByRole("button", { name: "Check sold-out item" }).click();
+  await expect(page.getByText(/ordinary 404/)).toBeVisible();
+  const sessionId = await waitForNewSession(known);
+  await waitForSignal(sessionId, "network.jsonl", (events) => events.some((event) => dataOf(event).status === 404));
+  let manifest = JSON.parse(fs.readFileSync(path.join(sessionDir(sessionId), "manifest.json"), "utf8")) as { session: { pinned?: boolean } };
+  expect(manifest.session.pinned).not.toBe(true);
 
-  // Click "Delete All Tasks" — triggers DELETE /api/tasks → 405
-  const deleteBtn = page.locator("button", { hasText: "Delete All Tasks" });
-  await expect(deleteBtn).toBeVisible();
-  await deleteBtn.click();
-  await page.waitForTimeout(3000);
-
-  const network = readSessionFile<{
-    url?: string;
-    method?: string;
-    status?: number;
-  }>("network.jsonl");
-
-  const deleteReq = network.find(
-    (n) => n.method === "DELETE" && n.url?.includes("/api/tasks"),
-  );
-  expect(deleteReq).toBeDefined();
-  expect(deleteReq!.status).toBe(405);
+  await page.getByRole("button", { name: "Place broken order" }).click();
+  await waitForSignal(sessionId, "errors.jsonl", (events) => events.length > 0);
+  manifest = JSON.parse(fs.readFileSync(path.join(sessionDir(sessionId), "manifest.json"), "utf8")) as { session: { pinned?: boolean } };
+  expect(manifest.session.pinned).toBe(true);
+  expect(sessionContains(sessionId, "fixture-secret")).toBe(false);
+  await context.close();
 });
 
-test("CLI summary works", async ({ page }) => {
-  await page.goto("/");
-  await page.waitForTimeout(3000);
-
-  const output = execSync("node dist/cli/index.js summary", {
-    cwd: ROOT,
-    encoding: "utf-8",
-    timeout: 10_000,
-  });
-
-  // The summary is what an agent actually reads, so it has to carry the
-  // recorded evidence, not just the section headings — it must name the failing
-  // request and quote the console error that the session captured.
-  expect(output).toContain("/api/tasks");
-  expect(output.toLowerCase()).toContain("failed to fetch tasks");
+test("serves the viewer and deterministic budgeted inspection", async ({ browser }) => {
+  let latest = (await listSessions())[0];
+  if (!latest) {
+    const known = new Set<string>();
+    const fixture = await browser.newPage();
+    await fixture.goto(BUGBOARD_URL);
+    await fixture.getByRole("button", { name: "Run clean triage" }).click();
+    const { sessionId: id } = await waitForNewSessionWithSignal(
+      known,
+      "network.jsonl",
+      (events) => events.some((event) => dataOf(event).status === 200),
+    );
+    await fixture.close();
+    latest = (await listSessions()).find((session) => session.id === id);
+  }
+  expect(latest).toBeDefined();
+  const page = await browser.newPage();
+  const response = await page.goto(`${SIDECAR_URL}/?session=${latest!.id}`);
+  expect(response?.status()).toBe(200);
+  await expect(page.locator(".brand")).toContainText("Agent Replay");
+  const inspection = runCli(["inspect", latest!.id, "--budget", "1000"]);
+  expect(inspection).toContain("# Agent Replay session");
+  expect(inspection.length).toBeLessThanOrEqual(4_200);
+  expect(readSignal(latest!.id, "timeline.jsonl").length).toBeGreaterThan(0);
+  await page.close();
 });
 
-test("separate JSONL files are created", async ({ page }) => {
-  await page.goto("/");
-  await page.waitForTimeout(3000);
-
-  // Verify expected files exist
-  expect(sessionFileExists("events.jsonl")).toBe(true);
-  expect(sessionFileExists("console.jsonl")).toBe(true);
-  expect(sessionFileExists("network.jsonl")).toBe(true);
-  expect(sessionFileExists("session.json")).toBe(true);
-
-  // Verify the latest symlink resolves
-  const target = getLatestTarget();
-  expect(target).not.toBeNull();
-  expect(target).toContain("sessions/");
+test("uses only the isolated e2e recording directory", () => {
+  expect(AGENT_REPLAY_DIR).toContain(".agent-replay-e2e");
+  expect(fs.existsSync(path.join(ROOT, ".agent-replay"))).toBe(false);
 });

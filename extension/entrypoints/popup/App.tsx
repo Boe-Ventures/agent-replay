@@ -6,6 +6,7 @@ interface Recording {
   eventCount: number;
   sidecarConnected: boolean;
   startedAt: number;
+  demoCaptureId?: string;
 }
 
 interface Status {
@@ -23,6 +24,8 @@ function formatDuration(ms: number): string {
 export default function App() {
   const [status, setStatus] = useState<Status | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [tabAudio, setTabAudio] = useState(false);
 
   useEffect(() => {
     function fetchStatus() {
@@ -65,13 +68,42 @@ export default function App() {
   const isLocalhost =
     rec?.url?.startsWith("http://localhost") ||
     rec?.url?.startsWith("http://127.0.0.1");
+  const demo = Boolean(rec?.demoCaptureId);
+  const toggleDemo = async () => {
+    setBusy(true);
+    setError(null);
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tabId = tabs[0]?.id;
+    if (tabId == null) { setError("No active tab"); setBusy(false); return; }
+    const response = await chrome.runtime.sendMessage({
+      type: demo ? "STOP_DEMO" : "START_DEMO",
+      tabId,
+      audio: demo ? undefined : tabAudio,
+    });
+    if (response?.error) setError(response.error);
+    setBusy(false);
+  };
 
   return (
     <div className="popup">
       <div className="header">
-        <h1>⚡ Agent Replay</h1>
-        <span className="version">v0.1.0</span>
+        <h1><span className="rec-dot" /> Agent Replay</h1>
+        <span className="version">v0.3.0</span>
       </div>
+
+      <button className={`demo-button ${demo ? "recording" : ""}`} disabled={busy || !rec || !status?.sidecarAvailable} onClick={() => void toggleDemo()}>
+        {busy ? "Please wait…" : demo ? "Stop demo recording" : "Record polished demo"}
+      </button>
+      <label className="audio-toggle">
+        <input
+          type="checkbox"
+          checked={tabAudio}
+          disabled={busy || demo}
+          onChange={(event) => setTabAudio(event.currentTarget.checked)}
+        />
+        Include tab audio (beta)
+      </label>
+      <p className="demo-help">{demo ? "True tab pixels are streaming locally across navigation." : "Uses Chrome tab capture for faithful marketing video."}</p>
 
       <div className="status-grid">
         {/* Recording status */}
@@ -158,14 +190,7 @@ export default function App() {
       )}
 
       <div className="footer">
-        <a
-          href="http://localhost:3700/sessions"
-          target="_blank"
-          rel="noopener"
-          className="link"
-        >
-          Sidecar API →
-        </a>
+        <button className="link" onClick={() => void chrome.runtime.sendMessage({ type: "OPEN_VIEWER" })}>Open local viewer →</button>
       </div>
     </div>
   );

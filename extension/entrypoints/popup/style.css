@@ -30,6 +30,7 @@ body {
   font-weight: 600;
   color: #fafafa;
 }
+.rec-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#fb7185;box-shadow:0 0 12px #fb7185}
 
 .version {
   font-size: 11px;
@@ -137,8 +138,11 @@ body {
   border-top: 1px solid #27272a;
   text-align: center;
 }
+.demo-button{width:100%;margin-top:16px;border:1px solid #3b82f6;background:#1d4ed8;color:white;padding:10px;border-radius:8px;font-weight:650;cursor:pointer}.demo-button:disabled{opacity:.45;cursor:not-allowed}.demo-button.recording{background:#be123c;border-color:#fb7185}.demo-help{color:#71717a;font-size:11px;line-height:1.4;margin-top:6px}
+.audio-toggle{display:flex;align-items:center;gap:7px;margin-top:9px;color:#a1a1aa;font-size:11px;cursor:pointer}.audio-toggle input{accent-color:#60a5fa}.audio-toggle:has(input:disabled){opacity:.55;cursor:not-allowed}
 
 .link {
+  border:0;background:transparent;cursor:pointer;
   color: #60a5fa;
   text-decoration: none;
   font-size: 12px;

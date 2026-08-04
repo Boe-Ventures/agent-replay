@@ -1,4 +1,4 @@
-import type { AgentReplayEvent, Transport } from "./types.js";
+import type { AgentReplayEvent, Transport, TransportPayload } from "./types.js";
 
 // ── Health check + backoff constants ─────────────────────
 
@@ -23,9 +23,12 @@ export class PostTransport implements Transport {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private healthTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
+  private context: Omit<TransportPayload, "events"> = {};
+  private token?: string;
 
-  constructor(url: string) {
+  constructor(url: string, options: { token?: string } = {}) {
     this.url = url;
+    this.token = options.token;
     // Derive base URL: "/api/__agent-replay/events" → "/api/__agent-replay"
     // "http://localhost:3700/events" → "http://localhost:3700"
     this.baseUrl = url.replace(/\/events\/?$/, "");
@@ -121,7 +124,8 @@ export class PostTransport implements Transport {
     return this.healthChecked;
   }
 
-  async send(events: AgentReplayEvent[]): Promise<void> {
+  async send(events: AgentReplayEvent[], context?: Omit<TransportPayload, "events">): Promise<void> {
+    if (context) this.context = context;
     // Buffer if not healthy
     if (this.healthy === false) {
       this.bufferEvents(events);
@@ -149,8 +153,11 @@ export class PostTransport implements Transport {
       try {
         const response = await fetch(this.url, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ events: batch }),
+          headers: {
+            "Content-Type": "application/json",
+            ...(this.token ? { "X-Agent-Replay-Token": this.token } : {}),
+          },
+          body: JSON.stringify({ events: batch, ...this.context }),
         });
         if (!response.ok) {
           // Re-queue on failure, mark unhealthy

@@ -1,0 +1,28 @@
+{
+  "beforeSessionId": "21204cae-13dd-4037-bb6c-f016d3cb055e",
+  "afterSessionId": "fd2cbab9-ba94-43e7-a1c5-351376384d39",
+  "alignment": "markers",
+  "resolvedErrors": [
+    "POST /api/triage returned 500",
+    "\"[BugBoard] Triage sync failed\" \"@http://127.0.0.1:3897/_next/static/chunks/app/page-325341e61a9c540b.js:1:898\\nEnd of stack for Error object\""
+  ],
+  "newErrors": [],
+  "changedNetwork": [
+    {
+      "key": "POST http://127.0.0.1:3897/api/triage",
+      "beforeStatus": 500,
+      "afterStatus": 200
+    }
+  ],
+  "completedRoutes": [],
+  "missingRoutes": [],
+  "timingChanges": [
+    {
+      "key": "POST http://127.0.0.1:3897/api/triage",
+      "beforeMs": 266,
+      "afterMs": 277,
+      "deltaMs": 11
+    }
+  ],
+  "finalStateChanged": true
+}

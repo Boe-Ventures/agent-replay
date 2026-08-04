@@ -9,8 +9,13 @@ import type {
   ErrorEntry,
   FilterConfig,
   Transport,
+  AgentReplayEventData,
+  AgentReplayEventType,
+  PageMetadata,
+  SessionMetadata,
 } from "./types.js";
-import { getOrCreateSession } from "./session.js";
+import { createEvent, endSession, getCurrentSession, getOrCreatePage, getOrCreateSession } from "./session.js";
+import { sanitizeEvent } from "./privacy.js";
 
 type EventCallback = (event: AgentReplayEvent) => void;
 
@@ -21,11 +26,17 @@ interface RecorderState {
   rrwebStop: (() => void) | null;
   networkCleanup: (() => void) | null;
   errorCleanup: (() => void) | null;
+  interactionCleanup: (() => void) | null;
+  routeCleanup: (() => void) | null;
+  performanceCleanup: (() => void) | null;
   listeners: EventCallback[];
   buffer: AgentReplayEvent[];
   flushTimer: ReturnType<typeof setInterval> | null;
   transport: Transport | null;
   filters: FilterConfig;
+  privacy: Pick<RecorderConfig, "privacyPreset" | "redaction">;
+  sessionMetadata: SessionMetadata;
+  pageMetadata: PageMetadata;
   config: Required<
     Pick<
       RecorderConfig,
@@ -41,7 +52,7 @@ interface RecorderState {
 let state: RecorderState | null = null;
 
 function getSessionStart(): number {
-  const session = getOrCreateSession();
+  const session = getCurrentSession() ?? getOrCreateSession();
   return new Date(session.startedAt).getTime();
 }
 
@@ -84,14 +95,18 @@ function applyFilters(event: AgentReplayEvent, filters: FilterConfig): boolean {
   }
 }
 
-function emit(event: AgentReplayEvent): void {
+function emit(event: Partial<AgentReplayEvent> & { type: AgentReplayEventType; data: AgentReplayEventData }): void {
   if (!state) return;
+  const normalized = event.id && event.pageId && event.sequence != null && event.offsetMs != null
+    ? event as AgentReplayEvent
+    : createEvent(event.type, event.data);
+  const sanitized = sanitizeEvent(normalized, state.privacy, state.sessionMetadata.url);
 
   // Apply filters — drop event if filter returns false
-  if (!applyFilters(event, state.filters)) return;
+  if (!applyFilters(sanitized, state.filters)) return;
 
-  state.buffer.push(event);
-  for (const cb of state.listeners) cb(event);
+  state.buffer.push(sanitized);
+  for (const cb of state.listeners) cb(sanitized);
   if (state.buffer.length >= state.config.batchSize) {
     void flush();
   }
@@ -102,7 +117,10 @@ async function flush(): Promise<void> {
   const batch = state.buffer.splice(0);
   if (state.transport) {
     try {
-      await state.transport.send(batch);
+      await state.transport.send(batch, {
+        sessionMetadata: state.sessionMetadata,
+        pageMetadata: state.pageMetadata,
+      });
     } catch {
       // Re-add events on failure
       state.buffer.unshift(...batch);
@@ -189,9 +207,14 @@ function parseXhrHeaders(raw: string): Record<string, string> {
 
 /** Read a response body with a timeout to handle streaming */
 function readBodyWithTimeout(response: Response, timeoutMs: number): Promise<string | undefined> {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!/^(?:text\/|application\/(?:json|ld\+json|xml|x-www-form-urlencoded|graphql)|image\/svg\+xml)/i.test(contentType)) {
+    return Promise.resolve(undefined);
+  }
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
-      resolve("[Streaming response — body not captured within timeout]");
+      void response.body?.cancel().catch(() => undefined);
+      resolve(undefined);
     }, timeoutMs);
 
     response
@@ -371,46 +394,44 @@ function interceptNetwork(
         } catch { /* CORS may block */ }
       }
 
-      // Capture response body via clone + timeout
-      let responseBody: string | undefined;
-      let responseSize: number | undefined;
-      if (cfg.captureResponseBody) {
-        try {
-          const cloned = response.clone();
-          const raw = await readBodyWithTimeout(cloned, cfg.bodyTimeout);
-          if (raw != null) {
-            responseBody = truncate(raw, cfg.maxBodySize);
-            responseSize = raw.length;
+      const finishCapture = async () => {
+        let responseBody: string | undefined;
+        let responseSize: number | undefined;
+        if (cfg.captureResponseBody) {
+          try {
+            const raw = await readBodyWithTimeout(response.clone(), cfg.bodyTimeout);
+            if (raw != null) {
+              responseBody = truncate(raw, cfg.maxBodySize);
+              responseSize = raw.length;
+            }
+          } catch {
+            // Unsupported, binary, locked, and streaming bodies are intentionally skipped.
           }
-        } catch {
-          // Body read failed — leave undefined
         }
-      }
-
-      // Enrich with PerformanceObserver data
-      // Use setTimeout(0) to let the browser flush the PerformanceObserver buffer
-      const perfData = perfTracker.consume(url);
-
-      const entry: NetworkEntry = {
-        timestamp: now,
-        offsetMs: now - sessionStart,
-        method,
-        url,
-        status: response.status,
-        statusText: response.statusText,
-        durationMs: Math.round(durationMs * 100) / 100,
-        requestHeaders,
-        responseHeaders,
-        requestBody,
-        responseBody,
-        responseSize,
-        transferSize: perfData?.transferSize,
-        initiatorType: perfData?.initiatorType ?? "fetch",
-        isError: response.status >= 400,
-        initiator: "fetch",
+        const perfData = perfTracker.consume(url);
+        const entry: NetworkEntry = {
+          timestamp: now,
+          offsetMs: now - sessionStart,
+          requestId: crypto.randomUUID(),
+          method,
+          url,
+          status: response.status,
+          statusText: response.statusText,
+          durationMs: Math.round(durationMs * 100) / 100,
+          requestHeaders,
+          responseHeaders,
+          requestBody,
+          responseBody,
+          responseSize,
+          transferSize: perfData?.transferSize,
+          initiatorType: perfData?.initiatorType ?? "fetch",
+          contentType: response.headers.get("content-type") ?? undefined,
+          isError: response.status >= 400,
+          initiator: "fetch",
+        };
+        emit({ type: "network", data: entry });
       };
-
-      emit({ type: "network", timestamp: now, sessionId, data: entry });
+      void finishCapture();
 
       // Also emit as error if 5xx
       if (response.status >= 500) {
@@ -421,7 +442,7 @@ function interceptNetwork(
           type: "error",
           source: "network",
         };
-        emit({ type: "error", timestamp: now, sessionId, data: errEntry });
+        emit({ type: "error", data: errEntry });
       }
 
       return response;
@@ -812,6 +833,120 @@ function interceptErrors(sessionId: string): () => void {
   };
 }
 
+function describeTarget(target: EventTarget | null): { selector?: string; text?: string } {
+  if (!(target instanceof Element)) return {};
+  const id = target.id ? "#" + CSS.escape(target.id) : "";
+  const name = target.getAttribute("name");
+  const role = target.getAttribute("role");
+  const selector = id || [
+    target.tagName.toLowerCase(),
+    name ? `[name="${CSS.escape(name)}"]` : "",
+    role ? `[role="${CSS.escape(role)}"]` : "",
+  ].join("");
+  const text = (target.getAttribute("aria-label") || target.textContent || "").trim().replace(/\s+/g, " ").slice(0, 120);
+  return { selector, text: text || undefined };
+}
+
+function interceptInteractions(): () => void {
+  const handler = (event: Event) => {
+    const described = describeTarget(event.target);
+    const input = event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLSelectElement
+      ? event.target
+      : null;
+    const type = event.type === "input" ? "input" : event.type === "change" ? "change" : event.type === "submit" ? "submit" : "click";
+    emit({
+      type: "interaction",
+      data: {
+        timestamp: Date.now(),
+        offsetMs: 0,
+        type,
+        target: described.selector,
+        text: described.text,
+        value: input?.value,
+        x: event instanceof MouseEvent ? event.clientX : undefined,
+        y: event instanceof MouseEvent ? event.clientY : undefined,
+      },
+    });
+  };
+  for (const type of ["click", "input", "change", "submit"]) document.addEventListener(type, handler, true);
+  return () => {
+    for (const type of ["click", "input", "change", "submit"]) document.removeEventListener(type, handler, true);
+  };
+}
+
+function interceptRoutes(): () => void {
+  let previous = location.href;
+  const originalPush = history.pushState;
+  const originalReplace = history.replaceState;
+  const record = (navigationType: "push" | "replace" | "pop") => {
+    const next = location.href;
+    if (next === previous) return;
+    emit({
+      type: "route-change",
+      data: { timestamp: Date.now(), offsetMs: 0, from: previous, to: next, navigationType },
+    });
+    previous = next;
+  };
+  history.pushState = function (...args) {
+    const result = originalPush.apply(this, args);
+    queueMicrotask(() => record("push"));
+    return result;
+  };
+  history.replaceState = function (...args) {
+    const result = originalReplace.apply(this, args);
+    queueMicrotask(() => record("replace"));
+    return result;
+  };
+  const onPop = () => record("pop");
+  addEventListener("popstate", onPop);
+  emit({
+    type: "route-change",
+    data: { timestamp: Date.now(), offsetMs: 0, from: "", to: previous, navigationType: "load" },
+  });
+  return () => {
+    history.pushState = originalPush;
+    history.replaceState = originalReplace;
+    removeEventListener("popstate", onPop);
+  };
+}
+
+function interceptPerformance(): () => void {
+  if (typeof PerformanceObserver === "undefined") return () => {};
+  const observers: PerformanceObserver[] = [];
+  for (const entryType of ["navigation", "paint", "largest-contentful-paint", "longtask", "layout-shift"]) {
+    try {
+      const observer = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          emit({
+            type: "performance",
+            data: {
+              timestamp: Date.now(), offsetMs: 0, name: entry.name, entryType: entry.entryType,
+              duration: entry.duration, startTime: entry.startTime,
+              detail: typeof entry.toJSON === "function" ? toPlainJson(entry.toJSON()) : undefined,
+            },
+          });
+        }
+      });
+      observer.observe({ type: entryType, buffered: true });
+      observers.push(observer);
+    } catch {
+      // Entry type not supported in this browser.
+    }
+  }
+  return () => observers.forEach((observer) => observer.disconnect());
+}
+
+function toPlainJson(value: unknown): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(JSON.stringify(value, (_key, item) => typeof item === "bigint" ? String(item) : item)) as unknown;
+    return parsed != null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // ── Public API ───────────────────────────────────────────
 
 export async function startRecording(
@@ -821,7 +956,11 @@ export async function startRecording(
   if (typeof window === "undefined") return;
   if (state) return; // Already recording
 
-  const session = getOrCreateSession(config.sessionId);
+  const session = getOrCreateSession(config.sessionId, config.recordingMode ?? "rolling");
+  session.mode = config.recordingMode ?? "rolling";
+  session.privacyPreset = config.privacyPreset ?? (config.recordingMode === "demo" ? "demo" : "safe");
+  session.metadata = config.metadata;
+  const page = getOrCreatePage();
 
   const resolvedConfig = {
     captureConsole: config.captureConsole ?? true,
@@ -835,21 +974,32 @@ export async function startRecording(
     rrwebStop: null,
     networkCleanup: null,
     errorCleanup: null,
+    interactionCleanup: null,
+    routeCleanup: null,
+    performanceCleanup: null,
     listeners: [],
     buffer: [],
     flushTimer: null,
     transport: transport ?? null,
     filters: config.filters ?? {},
+    privacy: {
+      privacyPreset: session.privacyPreset,
+      redaction: config.redaction,
+    },
+    sessionMetadata: session,
+    pageMetadata: page,
     config: resolvedConfig,
   };
 
   // Start rrweb DOM recording
   if (resolvedConfig.captureDom) {
     // rrweb doesn't have proper ESM exports, so we need a workaround
-    const rrwebModule = await import("rrweb") as unknown as {
+    const rrwebModule = await import("@rrweb/record") as unknown as {
       record: <T = eventWithTime>(options?: {
         emit?: (e: T, isCheckout?: boolean) => void;
         blockSelector?: string;
+        maskAllInputs?: boolean;
+        checkoutEveryNms?: number;
         sampling?: Record<string, unknown>;
         plugins?: unknown[];
       }) => (() => void) | undefined;
@@ -873,12 +1023,10 @@ export async function startRecording(
 
     const stopFn = record({
       emit(event: eventWithTime) {
-        const rrwebEvent: AgentReplayEvent = {
+        const rrwebEvent = {
           type: "rrweb",
-          timestamp: Date.now(),
-          sessionId: session.id,
           data: event,
-        };
+        } as const;
         emit(rrwebEvent);
 
         // Extract console events from rrweb plugin events
@@ -898,10 +1046,21 @@ export async function startRecording(
             };
             emit({
               type: "console",
-              timestamp: Date.now(),
-              sessionId: session.id,
               data: consoleEntry,
             });
+            if (consoleEntry.level === "error") {
+              emit({
+                type: "error",
+                data: {
+                  timestamp: consoleEntry.timestamp,
+                  offsetMs: consoleEntry.offsetMs,
+                  message: consoleEntry.args.map((value) => typeof value === "string" ? value : JSON.stringify(value)).join(" "),
+                  stack: consoleEntry.trace,
+                  type: "console-error",
+                  source: "console",
+                },
+              });
+            }
           }
         }
       },
@@ -916,6 +1075,8 @@ export async function startRecording(
           }
         : undefined,
       plugins: plugins,
+      maskAllInputs: config.maskAllInputs ?? session.privacyPreset === "safe",
+      checkoutEveryNms: config.retention?.checkpointIntervalMs ?? 30_000,
     });
 
     state.rrwebStop = stopFn ?? null;
@@ -932,6 +1093,9 @@ export async function startRecording(
 
   // Error interception
   state.errorCleanup = interceptErrors(session.id);
+  if (config.captureInteractions ?? true) state.interactionCleanup = interceptInteractions();
+  if (config.captureRoutes ?? true) state.routeCleanup = interceptRoutes();
+  if (config.capturePerformance ?? true) state.performanceCleanup = interceptPerformance();
 
   // Periodic flush
   state.flushTimer = setInterval(() => {
@@ -939,7 +1103,7 @@ export async function startRecording(
   }, resolvedConfig.flushIntervalMs);
 }
 
-export async function stopRecording(): Promise<void> {
+export async function stopRecording(end = true): Promise<void> {
   if (!state) return;
 
   // Stop rrweb
@@ -950,6 +1114,9 @@ export async function stopRecording(): Promise<void> {
 
   // Remove error listeners
   state.errorCleanup?.();
+  state.interactionCleanup?.();
+  state.routeCleanup?.();
+  state.performanceCleanup?.();
 
   // Clear flush timer
   if (state.flushTimer) clearInterval(state.flushTimer);
@@ -964,6 +1131,7 @@ export async function stopRecording(): Promise<void> {
   }
 
   state = null;
+  if (end) endSession();
 }
 
 export function onEvent(callback: EventCallback): () => void {
@@ -978,4 +1146,19 @@ export function onEvent(callback: EventCallback): () => void {
 
 export function getBufferedEvents(): AgentReplayEvent[] {
   return state?.buffer.slice() ?? [];
+}
+
+export function mark(label: string, metadata?: Record<string, unknown>): void {
+  emit({
+    type: "marker",
+    data: { timestamp: Date.now(), offsetMs: 0, label, metadata, triggerIncident: false },
+  });
+}
+
+export function triggerIncident(reason = "Manual incident"): void {
+  emit({
+    type: "marker",
+    data: { timestamp: Date.now(), offsetMs: 0, label: reason, triggerIncident: true },
+  });
+  void flush();
 }

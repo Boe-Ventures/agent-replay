@@ -1,193 +1,45 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { mark } from "@boe-ventures/agent-replay";
 
-interface Task {
-  id: string;
-  title: string;
-  completed: boolean;
-}
+const issues = [
+  { id: "BUG-142", title: "Checkout freezes after address change", status: "Investigating", owner: "Mara", priority: "P0" },
+  { id: "BUG-137", title: "Invoice download has the wrong locale", status: "Ready", owner: "Ivo", priority: "P1" },
+  { id: "BUG-129", title: "Avatar disappears on slow connections", status: "Fixed", owner: "Zoe", priority: "P2" },
+];
 
-export default function Home() {
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [newTitle, setNewTitle] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+export default function BugBoard() {
+  const [result, setResult] = useState<{ kind: "ok" | "error"; message: string } | null>(null);
+  const [running, setRunning] = useState(false);
 
-  // Fetch tasks on mount (small delay to ensure recording is active)
-  useEffect(() => {
-    const timer = setTimeout(() => fetchTasks(), 500);
-    return () => clearTimeout(timer);
-  }, []);
-
-  const fetchTasks = async () => {
-    setLoading(true);
-    setError(null);
+  const runTriage = async (mode: "broken" | "fixed") => {
+    setRunning(true); setResult(null);
+    mark("triage-sync", { fixture: "BugBoard", mode });
     try {
-      const res = await fetch("/api/tasks");
-      const data = await res.json();
-      // BUG 1 surfaces here: data.tasks is undefined because API returns "taks"
-      // The spread into array will throw: "TypeError: data.tasks is not iterable"
-      const taskList = [...data.tasks];
-      setTasks(taskList);
-    } catch (err) {
-      console.error("Failed to fetch tasks:", err);
-      setError("Failed to load tasks");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const addTask = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newTitle.trim()) return;
-
-    try {
-      const res = await fetch("/api/tasks", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: newTitle }),
+      const response = await fetch("/api/triage", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ issueId: "BUG-142", mode, apiKey: "fixture-secret-never-on-disk" }),
       });
-      // BUG 2 surfaces here: response body is malformed JSON
-      const data = await res.json();
-      console.log("Task created:", data);
-      setNewTitle("");
-      fetchTasks();
-    } catch (err) {
-      console.error("Failed to add task:", err);
-      setError("Failed to add task — server returned invalid response");
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error);
+      setResult({ kind: "ok", message: body.message });
+      mark("triage-complete", { status: response.status });
+    } catch (error) {
+      console.error("[BugBoard] Triage sync failed", error);
+      setResult({ kind: "error", message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setRunning(false);
     }
   };
 
-  const toggleTask = (id: string) => {
-    setTasks((prev) =>
-      prev?.map((t) => (t.id === id ? { ...t, completed: !t.completed } : t))
-    );
-  };
-
-  const deleteAll = async () => {
-    try {
-      // BUG 3: API doesn't handle DELETE — will return 405
-      const res = await fetch("/api/tasks", { method: "DELETE" });
-      if (!res.ok) {
-        const text = await res.text();
-        console.error(`Delete failed: ${res.status}`, text);
-        setError(`Delete failed with status ${res.status}`);
-        return;
-      }
-      setTasks([]);
-    } catch (err) {
-      console.error("Failed to delete tasks:", err);
-      setError("Failed to delete tasks");
-    }
-  };
-
-  return (
-    <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif", maxWidth: 600 }}>
-      <h1>📋 Task Manager</h1>
-      <p style={{ color: "#666" }}>
-        A simple task list app for testing{" "}
-        <code>@boe-ventures/agent-replay</code> bug detection.
-      </p>
-
-      {/* Add task form */}
-      <form onSubmit={addTask} style={{ display: "flex", gap: "0.5rem", margin: "1.5rem 0" }}>
-        <input
-          type="text"
-          value={newTitle}
-          onChange={(e) => setNewTitle(e.target.value)}
-          placeholder="Add a new task..."
-          style={{
-            flex: 1,
-            padding: "0.5rem 0.75rem",
-            fontSize: "1rem",
-            border: "1px solid #ccc",
-            borderRadius: 6,
-          }}
-        />
-        <button type="submit" style={buttonStyle("#2563eb")}>
-          Add Task
-        </button>
-      </form>
-
-      {/* Error banner */}
-      {error && (
-        <div style={{ padding: "0.75rem", background: "#fee2e2", color: "#dc2626", borderRadius: 6, marginBottom: "1rem" }}>
-          ⚠️ {error}
-        </div>
-      )}
-
-      {/* Task list */}
-      {loading ? (
-        <p>Loading tasks...</p>
-      ) : (
-        <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-          {/* BUG 4: Missing key prop — React will warn in console */}
-          {tasks?.map((task) => (
-            <li
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "0.75rem",
-                padding: "0.75rem",
-                borderBottom: "1px solid #eee",
-              }}
-            >
-              <span
-                style={{
-                  flex: 1,
-                  textDecoration: task.completed ? "line-through" : "none",
-                  color: task.completed ? "#999" : "#111",
-                }}
-              >
-                {task.title}
-              </span>
-              <button
-                onClick={() => toggleTask(task.id)}
-                style={buttonStyle(task.completed ? "#6b7280" : "#16a34a")}
-              >
-                {task.completed ? "Undo" : "Complete"}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {/* Delete all */}
-      <div style={{ marginTop: "1.5rem" }}>
-        <button onClick={deleteAll} style={buttonStyle("#dc2626")}>
-          🗑️ Delete All Tasks
-        </button>
-      </div>
-
-      {/* BUG 4: Missing key prop — React will warn in console */}
-      <div style={{ marginTop: "2rem" }}>
-        <h3>Recent Activity</h3>
-        <ul style={{ padding: 0, listStyle: "none" }}>
-          {["Page loaded", "Session started", "Recording active"].map((item) => (
-            <li style={{ padding: "0.25rem 0", color: "#666", fontSize: "0.875rem" }}>
-              • {item}
-            </li>
-          ))}
-        </ul>
-      </div>
-
-      <div style={{ marginTop: "2rem", padding: "1rem", background: "#f5f5f5", borderRadius: 8, fontSize: "0.875rem" }}>
-        <strong>Debug:</strong> Check <code>.agent-replay/latest/</code> for session recordings after interacting.
-      </div>
-    </main>
-  );
-}
-
-function buttonStyle(bg: string): React.CSSProperties {
-  return {
-    padding: "0.5rem 1rem",
-    fontSize: "0.875rem",
-    border: "none",
-    borderRadius: 6,
-    cursor: "pointer",
-    color: "white",
-    background: bg,
-    fontWeight: 600,
-  };
+  return <main>
+    <header className="top"><div><span className="mark">B</span><b>BugBoard</b><em>Replay fixture</em></div><span className="recording">● Agent Replay active</span></header>
+    <section className="intro"><div><p>INCIDENT DESK / TUESDAY</p><h1>Find the break.<br/>Prove the fix.</h1><span>A deterministic project board for producing real Agent Replay evidence, replays, and fix receipts.</span></div>
+      <div className="controls"><button disabled={running} className="broken" onClick={() => void runTriage("broken")}>Run broken triage</button><button disabled={running} onClick={() => void runTriage("fixed")}>Run clean triage</button></div></section>
+    {result && <div className={"result " + result.kind}><b>{result.kind === "ok" ? "Triage completed" : "Captured failure"}</b><span>{result.message}</span></div>}
+    <section className="board">{["Investigating","Ready","Fixed"].map((column) => <article key={column}><h2>{column}<small>{issues.filter((issue) => issue.status === column).length}</small></h2>{issues.filter((issue) => issue.status === column).map((issue) =>
+      <div className="card" key={issue.id}><div><code>{issue.id}</code><strong>{issue.priority}</strong></div><h3>{issue.title}</h3><footer><i>{issue.owner.slice(0,1)}</i>{issue.owner}<span>•••</span></footer></div>)}</article>)}</section>
+    <footer className="foot">Local fixture · no real customer data · matching marker: <code>triage-sync</code></footer>
+  </main>;
 }

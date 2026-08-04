@@ -9,6 +9,12 @@ playground/.next/
 *.local
 docs/COMPETITION.md
 test-results/
+.agent-replay-e2e/
+.agent-replay-e2e-artifacts/
+.agent-replay-extension-e2e/
+.agent-replay-tab-capture-qa/
+.agent-replay-homi-dogfood*/
+playwright-report/
 
 # Extension
 extension/.output/

@@ -10,11 +10,20 @@ export default defineConfig({
   manifest: {
     name: "Agent Replay",
     description:
-      "Zero-config session recording for localhost — captures DOM, console, network for AI coding agents.",
-    permissions: ["activeTab", "storage"],
+      "Local flight recorder and true tab video capture for localhost development.",
+    permissions: ["activeTab", "storage", "tabCapture", "offscreen"],
     host_permissions: [
       "http://localhost:*/*",
       "http://127.0.0.1:*/*",
     ],
+    action: {
+      default_title: "Agent Replay",
+    },
+    commands: {
+      _execute_action: {
+        suggested_key: { default: "Alt+Shift+R", mac: "MacCtrl+Shift+R" },
+        description: "Open Agent Replay recording controls",
+      },
+    },
   },
 });

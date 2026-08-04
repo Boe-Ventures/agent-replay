@@ -1,116 +1,47 @@
 import { useState } from "react";
+import { mark, triggerIncident } from "@boe-ventures/agent-replay";
+import "./style.css";
+
+const menu = [
+  { name: "Night Shift", detail: "Espresso · orange · tonic", price: 62 },
+  { name: "Stack Trace", detail: "Filter coffee · cardamom bun", price: 74 },
+  { name: "Hot Reload", detail: "Cortado · extra shot", price: 49 },
+];
 
 export function App() {
-  const [count, setCount] = useState(0);
-  const [fetchResult, setFetchResult] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState(0);
+  const [status, setStatus] = useState<string | null>(null);
 
-  const handleCount = () => {
-    const next = count + 1;
-    console.log(`[Counter] clicked → ${next}`);
-    setCount(next);
-  };
-
-  const handleError = () => {
-    console.error("[App] About to throw a runtime error");
-    throw new Error("Intentional runtime error from Vite playground");
-  };
-
-  const handleFetchOk = async () => {
-    setFetchResult(null);
-    setError(null);
-    try {
-      // Fetch a local JSON file served by Vite
-      const res = await fetch("/mock-api/tasks.json");
-      const data: unknown = await res.json();
-      console.log("[Fetch OK] response:", data);
-      setFetchResult(JSON.stringify(data, null, 2));
-    } catch (err) {
-      console.error("[Fetch OK] failed:", err);
-      setError(String(err));
+  const placeOrder = async (mode: "broken" | "fixed") => {
+    setStatus("Sending order…");
+    mark("place-order", { fixture: "CrashCafe", mode, item: menu[selected]!.name });
+    const response = await fetch("/mock-api/order.json?api_key=fixture-secret");
+    const data = await response.json() as { receipt?: { total?: number }; orderId: string };
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    if (mode === "broken") {
+      triggerIncident("checkout-total-missing");
+      const total = data.receipt!.total!.toFixed(2);
+      setStatus("Charged " + total);
+      return;
     }
+    const total = menu[selected]!.price;
+    setStatus(`Order ${data.orderId} confirmed · NOK ${total}`);
+    mark("order-confirmed", { orderId: data.orderId, total });
   };
 
-  const handleFetch404 = async () => {
-    setFetchResult(null);
-    setError(null);
-    try {
-      const res = await fetch("/api/nonexistent");
-      console.warn(`[Fetch 404] status: ${res.status}`);
-      if (!res.ok) {
-        setError(`Request failed with status ${res.status}`);
-        return;
-      }
-      const data: unknown = await res.json();
-      setFetchResult(JSON.stringify(data, null, 2));
-    } catch (err) {
-      console.error("[Fetch 404] failed:", err);
-      setError(String(err));
-    }
+  const ordinary404 = async () => {
+    const response = await fetch("/mock-api/sold-out.json");
+    setStatus("Sold-out lookup returned " + response.status + " (ordinary 404, not incident-pinned)");
   };
 
-  return (
-    <main style={{ padding: "2rem", fontFamily: "system-ui, sans-serif", maxWidth: 640 }}>
-      <h1>⚡ Agent Replay — Vite Playground</h1>
-      <p style={{ color: "#666" }}>
-        Minimal test bed for <code>@boe-ventures/agent-replay</code> without
-        Next.js. Each button exercises a different capture path.
-      </p>
-
-      <section style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginTop: "1.5rem" }}>
-        {/* Counter */}
-        <button onClick={handleCount} style={btn("#2563eb")}>
-          🔢 Counter: {count}
-        </button>
-
-        {/* Runtime error */}
-        <button onClick={handleError} style={btn("#dc2626")}>
-          💥 Throw Runtime Error
-        </button>
-
-        {/* Successful fetch */}
-        <button onClick={handleFetchOk} style={btn("#16a34a")}>
-          ✅ Fetch Mock API (200)
-        </button>
-
-        {/* 404 fetch */}
-        <button onClick={handleFetch404} style={btn("#d97706")}>
-          🚫 Fetch Non-existent (404)
-        </button>
-      </section>
-
-      {/* Result / error display */}
-      {error && (
-        <div style={{ marginTop: "1rem", padding: "0.75rem", background: "#fee2e2", color: "#dc2626", borderRadius: 6 }}>
-          ⚠️ {error}
-        </div>
-      )}
-      {fetchResult && (
-        <pre style={{ marginTop: "1rem", padding: "0.75rem", background: "#f0fdf4", borderRadius: 6, fontSize: "0.85rem", overflow: "auto" }}>
-          {fetchResult}
-        </pre>
-      )}
-
-      <div style={{ marginTop: "2rem", padding: "1rem", background: "#f5f5f5", borderRadius: 8, fontSize: "0.875rem" }}>
-        <strong>Debug:</strong> Run{" "}
-        <code>npx agent-replay dev --port 3700</code> alongside this dev
-        server, then check <code>.agent-replay/latest/</code> for captured
-        events.
-      </div>
-    </main>
-  );
-}
-
-function btn(bg: string): React.CSSProperties {
-  return {
-    padding: "0.6rem 1.2rem",
-    fontSize: "1rem",
-    border: "none",
-    borderRadius: 8,
-    cursor: "pointer",
-    color: "white",
-    background: bg,
-    fontWeight: 600,
-    textAlign: "left",
-  };
+  return <main>
+    <nav><div className="bean">C</div><b>Crash Café</b><span>LOCAL / OSL</span><em>● REC</em></nav>
+    <section className="hero"><div><p>AGENT REPLAY FIXTURE № 02</p><h1>Coffee for humans.<br/><i>Evidence for agents.</i></h1><span>A privacy-safe checkout designed to break the same way, every time.</span></div><div className="cup"><div>CRASH<br/>CAFÉ</div><span/></div></section>
+    <section className="order"><div className="menu"><header><h2>Night menu</h2><span>03 items</span></header>{menu.map((item, index) =>
+      <button className={selected === index ? "selected" : ""} key={item.name} onClick={() => setSelected(index)}><i>{String(index + 1).padStart(2,"0")}</i><span><b>{item.name}</b><small>{item.detail}</small></span><strong>{item.price},-</strong></button>)}</div>
+      <aside><p>YOUR ORDER</p><h2>{menu[selected]!.name}</h2><dl><div><dt>Item</dt><dd>{menu[selected]!.price},-</dd></div><div><dt>Service</dt><dd>0,-</dd></div><div><dt>Total</dt><dd>{menu[selected]!.price},-</dd></div></dl>
+        <button className="break" onClick={() => void placeOrder("broken")}>Place broken order</button><button onClick={() => void placeOrder("fixed")}>Place clean order</button><button className="quiet" onClick={() => void ordinary404()}>Check sold-out item (404)</button>
+        {status && <output>{status}</output>}</aside></section>
+    <footer><span>Session mode · safe privacy</span><code>marker: place-order</code><span>No real payments or customer data</span></footer>
+  </main>;
 }

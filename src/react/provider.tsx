@@ -34,6 +34,8 @@ export interface AgentReplayProviderProps {
   maxBodySize?: number;
 }
 
+const DEFAULT_CONFIG: Partial<RecorderConfig> = {};
+
 declare global {
   interface Window {
     __AGENT_REPLAY_ACTIVE__?: boolean;
@@ -50,8 +52,8 @@ function isNextJs(): boolean {
 /** Resolve the endpoint URL based on environment */
 function resolveEndpointUrl(sidecarUrl: string | undefined): string {
   if (sidecarUrl) return sidecarUrl;
-  if (isNextJs()) return "/api/__agent-replay";
-  return "http://localhost:3700";
+  if (isNextJs()) return "/api/__agent-replay/api/v1";
+  return "http://127.0.0.1:3700/api/v1";
 }
 
 export function AgentReplayProvider({
@@ -61,13 +63,14 @@ export function AgentReplayProvider({
   captureConsole = true,
   captureNetwork = true,
   sessionId,
-  config = {},
+  config: providedConfig,
   filterConsole,
   filterNetwork,
   filterError,
   maxBodySize,
 }: AgentReplayProviderProps) {
   const initialized = useRef(false);
+  const config = providedConfig ?? DEFAULT_CONFIG;
 
   // Auto-disable in production
   const isEnabled =
@@ -80,8 +83,8 @@ export function AgentReplayProvider({
 
     const resolvedUrl = resolveEndpointUrl(sidecarUrl);
     const eventsUrl = `${resolvedUrl}/events`;
-    const transport = new PostTransport(eventsUrl);
-    const session = getOrCreateSession(sessionId);
+    const transport = new PostTransport(eventsUrl, { token: config.token });
+    const session = getOrCreateSession(sessionId, config.recordingMode ?? "rolling");
 
     // Signal to chrome extension that provider is active
     window.__AGENT_REPLAY_ACTIVE__ = true;
@@ -91,34 +94,10 @@ export function AgentReplayProvider({
 
     const initRecording = async () => {
       // Perform initial health check
-      const healthy = await transport.checkHealth();
+      await transport.checkHealth();
 
       // Start health monitoring for reconnection
       transport.startHealthMonitor();
-
-      // Intercept first send to include session metadata
-      const originalSend = transport.send.bind(transport);
-      let metadataSent = false;
-      transport.send = async (events) => {
-        if (!metadataSent) {
-          metadataSent = true;
-          const body = JSON.stringify({
-            events,
-            sessionMetadata: session,
-          });
-          try {
-            await fetch(eventsUrl, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body,
-            });
-          } catch {
-            // Silently buffer — transport handles retry
-          }
-          return;
-        }
-        return originalSend(events);
-      };
 
       // Start recording regardless — transport buffers events when endpoint is down
       await startRecording(
@@ -152,11 +131,11 @@ export function AgentReplayProvider({
       window.__AGENT_REPLAY_ACTIVE__ = false;
       void transport.close();
       if (recordingStarted) {
-        void stopRecording();
+        void stopRecording(false);
       }
       initialized.current = false;
     };
-  }, [isEnabled, sidecarUrl, captureConsole, captureNetwork, sessionId, config]);
+  }, [isEnabled, sidecarUrl, captureConsole, captureNetwork, sessionId, providedConfig]);
 
   return <>{children}</>;
 }

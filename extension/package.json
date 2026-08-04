@@ -1,9 +1,9 @@
 {
   "name": "@boe-ventures/agent-replay-extension",
   "displayName": "Agent Replay",
-  "description": "Zero-config session recording for localhost — captures DOM, console, network for AI coding agents",
+  "description": "Local flight recorder and true tab video capture for localhost development",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",
@@ -18,9 +18,9 @@
   "dependencies": {
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "rrweb": "^2.0.0-alpha.4",
-    "@rrweb/rrweb-plugin-console-record": "^2.0.0-alpha.20",
-    "@rrweb/types": "^2.0.0-alpha.20"
+    "@rrweb/record": "2.1.0",
+    "@rrweb/rrweb-plugin-console-record": "2.1.0",
+    "@rrweb/types": "2.1.0"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
@@ -28,6 +28,6 @@
     "@types/chrome": "^0.0.300",
     "@wxt-dev/module-react": "^1.1.5",
     "typescript": "^5.7.0",
-    "wxt": "^0.20.17"
+    "wxt": "0.20.27"
   }
 }

@@ -1,223 +1,228 @@
-# @boe-ventures/agent-replay
+# Agent Replay
 
 [![npm version](https://img.shields.io/npm/v/@boe-ventures/agent-replay.svg)](https://www.npmjs.com/package/@boe-ventures/agent-replay)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue.svg)](https://www.typescriptlang.org/)
-[![GitHub stars](https://img.shields.io/github/stars/Boe-Ventures/agent-replay.svg?style=social)](https://github.com/Boe-Ventures/agent-replay)
+[![CI](https://github.com/Boe-Ventures/agent-replay/actions/workflows/ci.yml/badge.svg)](https://github.com/Boe-Ventures/agent-replay/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-Local session recording for AI-assisted development. Gives coding agents the same observability into a running web app that a human developer gets — console errors, network requests, DOM state, React component tree — but structured, programmatic, and cheap.
+> Capture once. Debug with any agent. Replay for humans. Export as video.
 
-## Why
+Agent Replay is a local, model-agnostic flight recorder for web development. It passively remembers a bounded history of DOM changes, console output, errors, requests, WebSockets, routes, interactions, performance, and markers—then turns that history into:
 
-AI coding agents today debug web apps by taking screenshots and feeding them to a vision model. That's expensive, slow, and lossy — you can't see network errors, console logs, or timing from a screenshot.
+- deterministic evidence a coding agent or local model can inspect;
+- a synchronized replay a human can browse;
+- a portable `.areplay` capsule, fix receipt, or video.
 
-Session recording captures *everything* that happens inside the app. The agent gets structured data instead of pixels. The human developer gets a video-like replay for review.
+**The browser remembers what your coding agent missed.**
 
-## How it works
+v0.3.0 is a public beta of the artifact contract. There is no account, cloud backend, production analytics service, proprietary AI dependency, or new browser controller.
 
-```
-Agent writes code → Dev server reloads
-                         ↓
-            AgentReplayProvider captures:
-            • DOM mutations (rrweb)
-            • Console logs/errors
-            • Network requests/responses
-            • React component tree + state
-            • User interactions (clicks, inputs, navigation)
-                         ↓
-            Events written to .agent-replay/
-                         ↓
-    ┌────────────────────┴────────────────────┐
-    │                                         │
-Agent reads structured events            Human views replay
-(file, CLI, or MCP tool)                (npx agent-replay view)
-```
-
-## Quick start
+## Install
 
 ```bash
 npm install @boe-ventures/agent-replay
+npx agent-replay dev
 ```
 
-### React (Next.js, Vite, Remix)
+The local receiver and viewer run at `http://127.0.0.1:3700`. It binds to loopback, writes to `.agent-replay/`, and uses safe privacy defaults.
+
+### React
 
 ```tsx
-// app/layout.tsx
 import { AgentReplayProvider } from "@boe-ventures/agent-replay/react";
 
-export default function Layout({ children }) {
+export function App() {
   return (
-    <html>
-      <body>
-        <AgentReplayProvider>
-          {children}
-        </AgentReplayProvider>
-      </body>
-    </html>
+    <AgentReplayProvider>
+      <YourApp />
+    </AgentReplayProvider>
   );
 }
 ```
 
-The provider auto-disables in production. Only records in development.
+The provider auto-disables outside development unless `enabled` is explicitly set.
 
-### Sidecar server (framework-agnostic)
+### Next.js
 
-```bash
-# Run alongside your dev server
-npx agent-replay dev
+Next.js setup is deliberately explicit: one provider component and one catch-all development route.
 
-# Or with a specific port
-npx agent-replay dev --port 3700
+```tsx
+// app/providers.tsx
+"use client";
+export { AgentReplayProvider as Providers } from "@boe-ventures/agent-replay/react";
 ```
-
-The sidecar receives events from the browser and writes them to `.agent-replay/`.
-
-### Next.js optimized
 
 ```ts
-// next.config.ts
-import { withAgentReplay } from "@boe-ventures/agent-replay/next";
-
-export default withAgentReplay(nextConfig);
+// app/api/__agent-replay/[...agentReplay]/route.ts
+export { GET, POST } from "@boe-ventures/agent-replay/next";
 ```
 
-Auto-injects the provider and API route. Zero config.
+Wrap the body in `<Providers>` in the root layout. The provider sends to the local catch-all route. For a standalone sidecar instead, configure `withAgentReplay(nextConfig, { mode: "sidecar" })`.
 
-## Agent consumption
+### Framework-agnostic Chrome extension
 
-### Flat files (works with any agent)
+The release extension records localhost applications without changing application code. Structured instrumentation runs in the page's main JavaScript world while an isolated relay owns extension transport. The background worker keeps session identity across navigations.
 
-```
-.agent-replay/
-  sessions/
-    2026-04-25T1430Z/
-      events.jsonl       # Full rrweb event stream
-      console.jsonl      # Console logs/errors only
-      network.jsonl      # Network requests/responses only
-      errors.jsonl       # Errors only (highest signal)
-      react-tree.json    # React component tree snapshot
-      summary.md         # LLM-friendly text summary
-  latest -> sessions/2026-04-25T1430Z/
-```
+It also includes **Record polished demo**, a user-initiated Chrome `tabCapture` path that streams true tab pixels into a local WebM across navigation. Tab audio is opt-in beta. The source ZIP is distributed through GitHub Releases in v0.3.
 
-Tell the agent: "Check `.agent-replay/latest/errors.jsonl` for recent errors" or "Read `.agent-replay/latest/summary.md` for a session overview."
+## Default recording model
 
-Separate files so the agent can choose what to look at without exhausting context.
+Rolling mode is the default:
 
-### CLI
+- five minutes of unpinned history;
+- rrweb checkpoints every 30 seconds;
+- incident triggers for uncaught errors, rejected promises, 5xx responses, network failures, and manual incident markers;
+- ordinary 4xx responses do not trigger incidents;
+- pinned recordings are retained for seven days, up to 20 by default.
+
+Use `recordingMode: "session"` for deliberate demos and complete end-to-end recordings, or `"demo"` with the demo privacy preset.
+
+Every normalized event has an event UUID, monotonic sequence, stable session ID, page ID, timestamp, and session offset. Writes are always session-addressed; concurrent tabs cannot switch a shared destination.
+
+## Privacy presets
+
+Redaction runs before transport and again at ingestion. Authorization, cookies, passwords, credentials, secrets, tokens, API keys, session identifiers, and configured field names are removed regardless of preset.
+
+| Preset | Form values | Headers | Same-origin text bodies |
+| --- | --- | --- | --- |
+| `safe` (default) | masked | redacted | up to 16 KiB |
+| `diagnostic` | ordinary non-secret values | redacted | up to 64 KiB |
+| `demo` | visible non-secret interactions | none stored | none stored |
+
+The receiver enforces allowed origins, UUID-only path components, batch and media limits, session/disk quotas, atomic metadata writes, and write-only cross-origin ingestion. Binding outside loopback requires an explicit token.
+
+## Agent workflow
 
 ```bash
-# Get a text summary of the last session
-npx agent-replay summary
-
-# Get just errors
-npx agent-replay errors
-
-# Get network failures
-npx agent-replay network --failures
-
-# Watch for new events (streaming)
-npx agent-replay watch
+agent-replay sessions
+agent-replay inspect --budget 4000
+agent-replay timeline --around 18400
+agent-replay errors
+agent-replay network --failures
+agent-replay watch
 ```
 
-### MCP tool (future)
+`inspect --budget` ranks evidence deterministically. It does not invoke an AI model. Flat files and the CLI remain the canonical integration for Codex, Claude Code, OpenHands, Continue, Ollama, and other shell-capable agents.
 
-```json
-{
-  "tool": "agent_replay_session",
-  "description": "Get the latest session recording events",
-  "parameters": {
-    "type": { "enum": ["summary", "errors", "network", "console", "all"] }
-  }
-}
-```
+The optional MCP server intentionally exposes only:
 
-## What gets captured
-
-| Signal | Source | File | Agent value |
-|--------|--------|------|-------------|
-| DOM mutations | rrweb | events.jsonl | Full page reconstruction |
-| Console logs | rrweb console plugin | console.jsonl | Errors, warnings, debug output |
-| Network requests | rrweb network plugin | network.jsonl | API failures, slow responses |
-| Errors | window.onerror + unhandledrejection | errors.jsonl | **Highest signal — read this first** |
-| User interactions | rrweb | events.jsonl | Clicks, inputs, navigation |
-| React tree | React DevTools hook | react-tree.json | Component state, props, context |
-| Route changes | Next.js router / History API | console.jsonl | Navigation flow |
-
-## Video replay
-
-Recordings can be converted to video for human review:
+- `list_sessions`
+- `inspect_session`
+- `get_timeline`
+- `compare_sessions`
+- `export_session`
 
 ```bash
-# Generate video from a session
-npx agent-replay video .agent-replay/latest
-
-# Or decompose into frames (for vision model analysis via vidgrid)
-npx agent-replay frames .agent-replay/latest --fps 1
+agent-replay mcp
 ```
 
-## Chrome Extension (zero-config)
+Copy-ready agent integrations live in [docs/integrations](./docs/integrations/README.md).
 
-The Chrome extension records any `localhost` page automatically — no npm install, no provider component, no code changes.
-
-### Install from source
+## Viewer
 
 ```bash
-cd extension
-pnpm install
-pnpm build
+agent-replay view
 ```
 
-Then load in Chrome:
-1. Open `chrome://extensions`
-2. Enable "Developer mode"
-3. Click "Load unpacked"
-4. Select `extension/.output/chrome-mv3/`
+The local React/Vite viewer includes session and incident browsing, live tailing, rrweb replay, console/network/WebSocket/error/route/interaction/marker lanes, search, signal filters, event detail, privacy state, clip in/out points, and timestamp deep links.
 
-### What it does
+Every packed capsule includes a standalone `report.html` that works locally without a cloud service.
 
-- Auto-injects rrweb + console/network recording on `localhost:*` and `127.0.0.1:*`
-- Streams events to the sidecar server (`npx agent-replay dev`) every 2 seconds
-- Shows recording status, event count, and sidecar connection in the popup
-- Badge shows "REC" on tabs being recorded
+## Portable capsules
 
-### Works with the npm package
-
-If `<AgentReplayProvider>` is already active on the page (sets `window.__AGENT_REPLAY_ACTIVE__`), the extension defers — no double recording. Both write to the same `.agent-replay/` directory via the sidecar.
-
-### Development
+Schema v1 stores a manifest, normalized timeline, per-signal JSONL, summary, markers, media, exports, and the compatibility `events.jsonl` rrweb stream.
 
 ```bash
-cd extension
-pnpm dev  # starts WXT dev mode with hot reload
+agent-replay pack [session-id]
+agent-replay pack [session-id] --no-media
 ```
 
-## Design principles
+This writes a ZIP-compatible `.areplay` archive. v0.2 directories are read non-destructively and migrate only when requested:
 
-- **Local-first.** No cloud, no accounts, no telemetry. Files on disk.
-- **Dev-only.** Auto-disabled in production. Zero runtime cost when off.
-- **Agent-first, human-friendly.** Structured data for agents, visual replay for humans.
-- **Separate files per signal.** Agent picks what it needs. No context exhaustion.
-- **Framework-agnostic core.** Next.js adapter for convenience. Works with Vite, Remix, CRA.
-- **Composable with agent-browser.** Agent-browser gives the outside view (accessibility tree, element refs). Agent-replay gives the inside view (errors, network, state). Together they're complete.
-
-## Interplay with agent-browser / Puppeteer
-
-```
-agent-browser ←→ Browser ←→ agent-replay
-   (outside)                   (inside)
-
-agent-browser: "Click button @e3"
-               "Snapshot accessibility tree"
-               "Get page title"
-
-agent-replay:  "Console error at checkout.tsx:47"
-               "POST /api/checkout returned 500"
-               "React state: cart.items = []"
+```bash
+agent-replay migrate                 # list legacy sessions
+agent-replay migrate <legacy-id>
+agent-replay migrate --all
 ```
 
-Agent-browser drives the browser. Agent-replay observes what happens inside. The agent uses both.
+## Fix receipts
 
-## License
+```bash
+agent-replay compare <before> <after>
+agent-replay receipt <before> <after> --video
+```
 
-MIT — [Boe Ventures](https://github.com/Boe-Ventures)
+Comparison aligns matching markers first, Playwright steps second, and route/action sequences third. It reports resolved and new errors, changed network outcomes, route completion, timing deltas, and final reconstructed state in JSON, Markdown, and HTML.
+
+## Three video paths
+
+### Retrospective replay export
+
+```bash
+agent-replay export <session> --format mp4 --preset launch
+agent-replay export <session> --format gif
+agent-replay export <session> --format poster
+agent-replay export <session> --format storyboard
+```
+
+Agent Replay opens the local viewer in Playwright, replays stored rrweb events, and records with Playwright screencasting.
+
+### Playwright verification receipts
+
+```ts
+import { test, expect } from "@boe-ventures/agent-replay/playwright";
+
+test("checkout", async ({ page, agentReplay }) => {
+  await agentReplay.step("Open checkout", () => page.goto("/checkout"));
+  await agentReplay.step("Place order", () => page.getByRole("button", { name: "Place order" }).click());
+  await expect(page.getByText("Order confirmed")).toBeVisible();
+});
+```
+
+Steps become chapters and a structured trace is stored beside the WebM.
+
+### Faithful Chrome tab recording
+
+Use **Record polished demo** in the extension. Chrome's user-initiated tab stream survives page navigation and is written in chunks through an MV3 offscreen document.
+
+```bash
+agent-replay export <session> --source tab --format mp4 --preset vertical --audio
+```
+
+WebM remains the source. Detected system FFmpeg creates H.264 MP4, GIF, posters, storyboards, and padded debug/16:9/square/vertical layouts. Run `agent-replay doctor` for exact Chrome, Playwright, FFmpeg, and ffprobe status.
+
+## Limitations
+
+rrweb reconstructs the DOM; it does not record pixels. Canvas, WebGL, maps, video, animation-heavy UI, and cross-origin embeds may be incomplete. Export warns when these signals appear and recommends true tab capture.
+
+v0.3 does not include microphone narration, cloud storage, a hosted backend, production analytics, React-internal snapshots, OTLP backend correlation, or another browser controller. React state and OTLP remain evidence-gated follow-ons.
+
+Native Codex, Claude, Playwright, and Chrome tooling are often better for active inspection of what is happening now. Agent Replay is for what already happened and for moving that evidence between tools.
+
+## CLI
+
+`dev`, `view`, `sessions`, `inspect`, `timeline`, `errors`, `network`, `watch`, `mark`, `pack`, `export`, `compare`, `receipt`, `doctor`, `migrate`, `clean`, and `mcp`.
+
+The local HTTP API is versioned under `/api/v1`. v0.2 routes remain deprecated aliases throughout v0.3.
+
+## Project history
+
+- [Current vision](./VISION.md)
+- [Original April 2026 vision, with context](./docs/ORIGINAL_VISION.md)
+- [Exact v0.2.1 README](./docs/archive/README-v0.2.1.md)
+- [Exact v0.2.1 design](./docs/archive/DESIGN-v0.2.1.md)
+- [Unchanged Homi dogfood findings](./docs/HOMI_INTEGRATION_FINDINGS.md)
+
+## Development
+
+```bash
+bun install
+bun run typecheck
+bun run test:unit
+bun run build
+bun run --cwd extension typecheck
+bun run --cwd extension build
+```
+
+Node 18+ remains supported for package consumers. The repository itself is a Bun workspace.
+
+MIT — [Boe Ventures](https://boe.ventures)

@@ -1,82 +1,166 @@
-import type { SessionMetadata } from "./types.js";
+import type { AgentReplayEvent, AgentReplayEventData, AgentReplayEventType, PageMetadata, RecordingMode, SessionMetadata } from "./types.js";
 
-let currentSession: SessionMetadata | null = null;
-const HMR_SESSION_KEY = "__agent_replay_session_id__";
+const STORAGE_KEY = "__agent_replay_session_v1__";
+const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 
-// Typed window access for HMR session persistence
-function getWindowProp(key: string): string | undefined {
-  if (typeof window === "undefined") return undefined;
-  return (window as unknown as Record<string, unknown>)[key] as string | undefined;
+interface PersistedSession {
+  metadata: SessionMetadata;
+  mode: RecordingMode;
+  lastSeenAt: number;
+  sequence: number;
 }
 
-function setWindowProp(key: string, value: string): void {
-  if (typeof window === "undefined") return;
-  (window as unknown as Record<string, unknown>)[key] = value;
+let currentSession: PersistedSession | null = null;
+let currentPage: PageMetadata | null = null;
+
+function randomUuid(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (char) => {
+    const value = Math.floor(Math.random() * 16);
+    return (char === "x" ? value : (value & 0x3) | 0x8).toString(16);
+  });
 }
 
-function deleteWindowProp(key: string): void {
-  if (typeof window === "undefined") return;
-  delete (window as unknown as Record<string, unknown>)[key];
+function readPersisted(): PersistedSession | null {
+  if (typeof sessionStorage === "undefined") return null;
+  try {
+    return JSON.parse(sessionStorage.getItem(STORAGE_KEY) ?? "null") as PersistedSession | null;
+  } catch {
+    return null;
+  }
 }
 
-/** Generate a timestamp-based session ID */
-function generateSessionId(): string {
-  const now = new Date();
-  return now.toISOString().replace(/[:.]/g, "-");
+function persist(value: PersistedSession | null): void {
+  if (typeof sessionStorage === "undefined") return;
+  try {
+    if (value) sessionStorage.setItem(STORAGE_KEY, JSON.stringify(value));
+    else sessionStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // Storage can be disabled. In-memory continuity still works.
+  }
 }
 
-/** Get or create a session, preserving across HMR */
-export function getOrCreateSession(
-  overrideId?: string
-): SessionMetadata {
-  if (currentSession) return currentSession;
-
-  // Check for existing HMR session
-  const existingId = getWindowProp(HMR_SESSION_KEY);
-  const id = overrideId ?? existingId ?? generateSessionId();
-
-  // Store for HMR continuity
-  setWindowProp(HMR_SESSION_KEY, id);
-
-  currentSession = {
-    id,
-    startedAt: new Date().toISOString(),
-    url: typeof window !== "undefined" ? window.location.href : "",
-    userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "",
-    viewport:
-      typeof window !== "undefined"
-        ? { width: window.innerWidth, height: window.innerHeight }
-        : { width: 0, height: 0 },
+function createSession(mode: RecordingMode, overrideId?: string): PersistedSession {
+  const now = Date.now();
+  const metadata: SessionMetadata = {
+    id: overrideId ?? randomUuid(),
+    schemaVersion: 1,
+    startedAt: new Date(now).toISOString(),
+    status: "active",
+    mode,
+    privacyPreset: "safe",
+    url: typeof location === "undefined" ? "" : location.href,
+    userAgent: typeof navigator === "undefined" ? "" : navigator.userAgent,
+    viewport: typeof window === "undefined"
+      ? { width: 0, height: 0 }
+      : { width: window.innerWidth, height: window.innerHeight },
   };
-
-  return currentSession;
+  return { metadata, mode, lastSeenAt: now, sequence: 0 };
 }
 
-/** End the current session */
+export function getOrCreateSession(
+  overrideId?: string,
+  mode: RecordingMode = "rolling",
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): SessionMetadata {
+  if (currentSession && (!overrideId || currentSession.metadata.id === overrideId) && currentSession.mode === mode) {
+    currentSession.lastSeenAt = Date.now();
+    persist(currentSession);
+    return currentSession.metadata;
+  }
+
+  const saved = readPersisted();
+  const now = Date.now();
+  const reusable = saved
+    && now - saved.lastSeenAt <= timeoutMs
+    && saved.mode === mode
+    && (!overrideId || saved.metadata.id === overrideId);
+
+  currentSession = reusable ? saved : createSession(mode, overrideId);
+  currentSession.lastSeenAt = now;
+  currentSession.metadata.url = typeof location === "undefined" ? currentSession.metadata.url : location.href;
+  currentSession.metadata.mode = mode;
+  persist(currentSession);
+  return currentSession.metadata;
+}
+
+export function getOrCreatePage(): PageMetadata {
+  if (currentPage) return currentPage;
+  currentPage = {
+    id: randomUuid(),
+    url: typeof location === "undefined" ? "" : location.href,
+    title: typeof document === "undefined" ? undefined : document.title,
+    startedAt: new Date().toISOString(),
+  };
+  return currentPage;
+}
+
+export function createEvent(
+  type: AgentReplayEventType,
+  data: AgentReplayEventData,
+): AgentReplayEvent {
+  const activeMode = currentSession?.mode ?? readPersisted()?.mode ?? "rolling";
+  const session = getOrCreateSession(undefined, activeMode);
+  const page = getOrCreatePage();
+  const timestamp = Date.now();
+  const startedAt = new Date(session.startedAt).getTime();
+  const active = currentSession ?? createSession(session.mode ?? "rolling", session.id);
+  currentSession = active;
+  const normalizedData = data && typeof data === "object"
+    ? { ...data, timestamp, offsetMs: Math.max(0, timestamp - startedAt) }
+    : data;
+  const event: AgentReplayEvent = {
+    id: randomUuid(),
+    type,
+    sequence: active.sequence++,
+    timestamp,
+    offsetMs: Math.max(0, timestamp - startedAt),
+    sessionId: session.id,
+    pageId: page.id,
+    data: normalizedData as AgentReplayEventData,
+  };
+  active.lastSeenAt = timestamp;
+  persist(active);
+  return event;
+}
+
 export function endSession(): SessionMetadata | null {
-  if (!currentSession) return null;
-  const session = { ...currentSession };
-  session.endedAt = new Date().toISOString();
-  session.durationMs =
-    new Date(session.endedAt).getTime() -
-    new Date(session.startedAt).getTime();
+  if (!currentSession) {
+    const saved = readPersisted();
+    if (!saved) return null;
+    currentSession = saved;
+  }
+  const endedAt = new Date().toISOString();
+  const metadata: SessionMetadata = {
+    ...currentSession.metadata,
+    endedAt,
+    status: "closed",
+    durationMs: new Date(endedAt).getTime() - new Date(currentSession.metadata.startedAt).getTime(),
+  };
   currentSession = null;
-
-  // Clear HMR key on explicit end
-  deleteWindowProp(HMR_SESSION_KEY);
-
-  return session;
+  currentPage = null;
+  persist(null);
+  return metadata;
 }
 
-/** Get the current session without creating one */
 export function getCurrentSession(): SessionMetadata | null {
-  return currentSession;
+  return currentSession?.metadata ?? readPersisted()?.metadata ?? null;
 }
 
-/** Force a new session (e.g., on full page reload detection) */
-export function rotateSession(): SessionMetadata {
+export function getCurrentPage(): PageMetadata | null {
+  return currentPage;
+}
+
+export function rotateSession(mode?: RecordingMode): SessionMetadata {
+  const previousMode = currentSession?.mode ?? readPersisted()?.mode ?? "rolling";
   endSession();
-  // Clear HMR key so we don't reuse
-  deleteWindowProp(HMR_SESSION_KEY);
-  return getOrCreateSession();
+  return getOrCreateSession(undefined, mode ?? previousMode);
+}
+
+export function touchSession(): void {
+  if (!currentSession) return;
+  currentSession.lastSeenAt = Date.now();
+  persist(currentSession);
 }
